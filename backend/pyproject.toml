@@ -10,13 +10,17 @@ packages = [{include = "app"}]
 server = "app.main:start_server"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.11.6"
 fastapi = "^0.109.0"
 uvicorn = "^0.27.0"
 python-dotenv = "^1.0.0"
 sqlalchemy = "^2.0.25"
 pydantic = "^2.5.3"
 pydantic-settings = "^2.1.0"
+boto3 = "^1.36.26"
+bcrypt = "^4.2.1"
+python-jose = "^3.4.0"
+cryptography = "^44.0.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.1.0"
