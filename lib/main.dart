@@ -211,6 +211,7 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       );
 
       log('Presigned URLs response status: ${response.statusCode}');
+      log('Presigned URLs response headers: ${response.headers}');
       log('Presigned URLs response body: ${response.body}');
 
       if (response.statusCode != 200) {
@@ -218,7 +219,23 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
             'Failed to get upload URLs: ${response.statusCode} - ${response.body}');
       }
 
-      final presignedData = jsonDecode(response.body);
+      final Map<String, dynamic> presignedData;
+      try {
+        presignedData = jsonDecode(response.body);
+        log('Successfully decoded JSON response');
+      } catch (e) {
+        log('Error decoding JSON response: $e');
+        throw Exception(
+            'Invalid response format from server: ${response.body}');
+      }
+
+      if (!presignedData.containsKey('presigned_urls') ||
+          !presignedData.containsKey('session_id')) {
+        log('Response missing required fields: $presignedData');
+        throw Exception(
+            'Server response missing required fields: ${response.body}');
+      }
+
       final List<String> presignedUrls =
           List<String>.from(presignedData['presigned_urls']);
       final String uploadSessionId = presignedData['session_id'];
@@ -226,8 +243,23 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       log('Received ${presignedUrls.length} presigned URLs');
       log('Upload session ID: $uploadSessionId');
 
+      // Validate presigned URLs
+      if (presignedUrls.isEmpty) {
+        throw Exception('No presigned URLs received from server');
+      }
+
+      for (var i = 0; i < presignedUrls.length; i++) {
+        final url = presignedUrls[i];
+        if (url.isEmpty) {
+          log('Warning: Empty presigned URL at index $i');
+        } else if (!url.startsWith('http')) {
+          log('Warning: Invalid presigned URL format at index $i: ${url.substring(0, url.length > 50 ? 50 : url.length)}...');
+        }
+      }
+
       // 2. Upload photos using presigned URLs
       final List<String> uploadedUrls = [];
+      final List<String> failedUploads = [];
 
       for (var i = 0; i < _selectedPhotos.length; i++) {
         if (i >= presignedUrls.length) break;
@@ -235,21 +267,35 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
         final photo = _selectedPhotos[i];
         log('Uploading photo ${i + 1}/${_selectedPhotos.length}: ${photo.path}');
 
-        final success = await _uploadToS3(presignedUrls[i], photo);
-        if (success) {
-          final uploadedUrl = presignedUrls[i].split('?')[0];
-          uploadedUrls.add(uploadedUrl);
-          log('Successfully uploaded to: $uploadedUrl');
-        } else {
-          log('Failed to upload photo ${i + 1}');
+        try {
+          final success = await _uploadToS3(presignedUrls[i], photo);
+          if (success) {
+            final uploadedUrl = presignedUrls[i].split('?')[0];
+            uploadedUrls.add(uploadedUrl);
+            log('Successfully uploaded to: $uploadedUrl');
+          } else {
+            log('Failed to upload photo ${i + 1}');
+            failedUploads.add('Photo ${i + 1}: ${photo.name}');
+          }
+        } catch (e) {
+          log('Error uploading photo ${i + 1}: $e');
+          failedUploads.add('Photo ${i + 1}: ${photo.name} - Error: $e');
         }
       }
 
       if (uploadedUrls.isEmpty) {
-        throw Exception('Failed to upload any photos');
+        if (failedUploads.isNotEmpty) {
+          throw Exception(
+              'Failed to upload any photos. Errors: ${failedUploads.join(", ")}');
+        } else {
+          throw Exception('Failed to upload any photos');
+        }
       }
 
       log('Successfully uploaded ${uploadedUrls.length} photos');
+      if (failedUploads.isNotEmpty) {
+        log('Failed uploads: ${failedUploads.join(", ")}');
+      }
 
       // 3. Create session with uploaded photos
       log('Creating session for uploaded photos');
