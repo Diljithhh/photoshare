@@ -11,8 +11,16 @@ applications:
             - flutter config --enable-web
             - flutter doctor -v
             - flutter pub get
-            - echo "API_URL=$API_URL" >> .env
-            - echo "API_KEY=$API_KEY" >> .env
+            - |
+              if [ -n "$API_URL" ]; then
+                echo "API_URL=$API_URL" >> .env
+              else
+                echo "API_URL=${AMPLIFY_API_URL}" >> .env
+              fi
+            - |
+              if [ -n "$SECRETS_API_KEY" ]; then
+                echo "API_KEY=${SECRETS_API_KEY}" >> .env
+              fi
         build:
           commands:
             - flutter build web --release
