@@ -34,8 +34,9 @@ class _SessionViewState extends State<SessionView> {
     });
 
     try {
+      final baseUrl = '${dotenv.env['API_URL']}/api/v1';
       final response = await http.post(
-        Uri.parse('${dotenv.env['API_URL']}/session/${widget.sessionId}/auth'),
+        Uri.parse('$baseUrl/session/${widget.sessionId}/auth'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'password': _passwordController.text}),
       );
@@ -71,9 +72,9 @@ class _SessionViewState extends State<SessionView> {
     });
 
     try {
+      final baseUrl = '${dotenv.env['API_URL']}/api/v1';
       final response = await http.get(
-        Uri.parse(
-            '${dotenv.env['API_URL']}/session/${widget.sessionId}/photos'),
+        Uri.parse('$baseUrl/session/${widget.sessionId}/photos'),
         headers: {
           'Authorization': 'Bearer $_accessToken',
         },
@@ -109,9 +110,9 @@ class _SessionViewState extends State<SessionView> {
     });
 
     try {
+      final baseUrl = '${dotenv.env['API_URL']}/api/v1';
       final response = await http.post(
-        Uri.parse(
-            '${dotenv.env['API_URL']}/session/${widget.sessionId}/select'),
+        Uri.parse('$baseUrl/session/${widget.sessionId}/select'),
         headers: {
           'Authorization': 'Bearer $_accessToken',
           'Content-Type': 'application/json',

@@ -164,7 +164,8 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       log('Starting upload process for ${_selectedPhotos.length} photos');
 
       // 1. Get presigned URLs
-      final url = Uri.parse('${dotenv.env['API_URL']}/upload');
+      final baseUrl = '${dotenv.env['API_URL']}/api/v1';
+      final url = Uri.parse('$baseUrl/upload');
       log('Making request to: $url');
 
       final response = await http.post(
@@ -175,6 +176,7 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
         },
         body: jsonEncode({
           'event_id': _eventIdController.text,
+          'num_photos': _selectedPhotos.length,
         }),
       );
 
@@ -221,8 +223,9 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
 
       // 3. Create session with uploaded photos
       log('Creating session for uploaded photos');
+      final sessionUrl = Uri.parse('$baseUrl/session/create');
       final sessionResponse = await http.post(
-        Uri.parse('${dotenv.env['API_URL']}/session/create'),
+        sessionUrl,
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',

@@ -28,6 +28,7 @@ EXPIRATION = 3600  # URL expiration in seconds (1 hour)
 
 class UploadRequest(BaseModel):
     event_id: str
+    num_photos: int = 1  # Default to 1 if not specified
 
 class PresignedURLResponse(BaseModel):
     session_id: str
@@ -39,9 +40,9 @@ async def generate_upload_urls(request: UploadRequest):
         # Generate a unique session ID
         session_id = str(uuid.uuid4())
 
-        # Generate presigned URLs for the maximum number of photos
+        # Generate presigned URLs for the requested number of photos
         presigned_urls = []
-        for i in range(MAX_PHOTOS):
+        for i in range(request.num_photos):
             # Create a unique key for each potential photo
             file_key = f"{request.event_id}/{session_id}/{i}.jpg"
 

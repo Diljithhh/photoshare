@@ -16,10 +16,12 @@ from app.core.security import (
     get_password_hash
 )
 import uuid
+from app.core.config import settings
 
 router = APIRouter()
 
-BASE_URL = "http://localhost:3000"  # Development URL for Flutter web
+# Use FRONTEND_URL from settings
+BASE_URL = settings.FRONTEND_URL
 
 class AuthRequest(BaseModel):
     password: str
