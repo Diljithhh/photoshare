@@ -1,0 +1,19 @@
+# Ignore everything
+*
+
+# Allow only backend files we need
+!backend/requirements.txt
+!backend/app/
+!backend/app/**
+
+# But still ignore these even if they're in backend/app
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/.env
+**/.git
+**/.gitignore
+**/venv
+**/.venv
