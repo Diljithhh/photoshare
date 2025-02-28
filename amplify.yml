@@ -11,6 +11,8 @@ applications:
             - flutter config --enable-web
             - flutter doctor -v
             - flutter pub get
+            - echo "API_URL=$API_URL" >> .env
+            - echo "API_KEY=$API_KEY" >> .env
         build:
           commands:
             - flutter build web --release
