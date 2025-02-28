@@ -16,7 +16,9 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
-BUCKET_NAME = "screenmirror-canvas-storage"
+# Use a bucket name pattern that matches a common AWS naming convention
+# The bucket name should be lowercase with hyphens, not spaces
+BUCKET_NAME = "photoshare-uploads"
 
 # Initialize S3 client
 logger.info("Initializing S3 client...")
@@ -30,16 +32,38 @@ try:
 
     # Test S3 connection
     logger.info("Testing S3 connection...")
-    s3_client.list_buckets()
-    logger.info("Successfully connected to S3")
+    bucket_list = s3_client.list_buckets()
+    logger.info(f"Available buckets: {[b['Name'] for b in bucket_list['Buckets']]}")
+
+    # Find a suitable bucket from the available ones
+    available_buckets = [b['Name'] for b in bucket_list['Buckets']]
+    logger.info(f"Looking for suitable bucket from available buckets: {available_buckets}")
+
+    if BUCKET_NAME in available_buckets:
+        logger.info(f"Found configured bucket: {BUCKET_NAME}")
+    else:
+        # Try to find a suitable bucket or use the first available one
+        if available_buckets:
+            BUCKET_NAME = available_buckets[0]
+            logger.info(f"Using first available bucket: {BUCKET_NAME}")
+        else:
+            logger.error("No buckets found in AWS account")
+            raise Exception("No buckets found in AWS account")
 
     # Verify bucket exists
     logger.info(f"Verifying bucket {BUCKET_NAME} exists...")
     s3_client.head_bucket(Bucket=BUCKET_NAME)
     logger.info(f"Successfully verified bucket {BUCKET_NAME}")
 
-except Exception as e:
+except ClientError as e:
+    error_response = e.response.get('Error', {})
+    error_code = error_response.get('Code', 'Unknown')
+    error_message = error_response.get('Message', str(e))
+    logger.error(f"AWS Error: Code={error_code}, Message={error_message}")
     logger.error(f"Error initializing S3 client or verifying bucket: {str(e)}")
+    raise
+except Exception as e:
+    logger.error(f"Unexpected error initializing S3: {str(e)}")
     raise
 
 # Constants
@@ -188,3 +212,53 @@ async def generate_upload_urls(request: UploadRequest):
             status_code=500,
             detail=f"Failed to generate upload URLs: {str(e)}"
         )
+
+@router.get("/test-s3", response_model=dict)
+async def test_s3_connection():
+    """Test endpoint to verify S3 connectivity and bucket configuration"""
+    try:
+        # Check S3 connection
+        buckets = s3_client.list_buckets()
+        bucket_names = [b['Name'] for b in buckets['Buckets']]
+
+        # Verify our bucket exists
+        bucket_exists = BUCKET_NAME in bucket_names
+
+        # Try to create a test object with a presigned URL
+        test_key = f"test-{uuid.uuid4()}.txt"
+        test_presigned_url = None
+
+        try:
+            test_presigned_url = s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': BUCKET_NAME,
+                    'Key': test_key,
+                    'ContentType': 'text/plain'
+                },
+                ExpiresIn=60
+            )
+        except Exception as e:
+            logger.error(f"Error generating test presigned URL: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Error generating test presigned URL: {str(e)}",
+                "buckets": bucket_names,
+                "current_bucket": BUCKET_NAME,
+                "bucket_exists": bucket_exists
+            }
+
+        return {
+            "status": "success",
+            "message": "S3 connection successful",
+            "buckets": bucket_names,
+            "current_bucket": BUCKET_NAME,
+            "bucket_exists": bucket_exists,
+            "test_presigned_url": test_presigned_url[:50] + "..." if test_presigned_url else None
+        }
+    except Exception as e:
+        logger.error(f"Error testing S3 connection: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error testing S3 connection: {str(e)}"
+        }
