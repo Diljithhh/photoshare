@@ -20,7 +20,7 @@ void log(String message) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
-  log('Environment loaded. API URL: ${dotenv.env['API_URL']}');
+  // log('Environment loaded. API URL: ${dotenv.env['API_URL']}');
   runApp(const MyApp());
 }
 
