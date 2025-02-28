@@ -5,8 +5,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:convert';
 
-
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:html' as html;
 import 'dart:async';
@@ -20,7 +18,7 @@ void log(String message) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
-  // log('Environment loaded. API URL: ${dotenv.env['API_URL']}');
+  log('Environment loaded. API URL: ${dotenv.env['API_URL']}');
   runApp(const MyApp());
 }
 
@@ -252,6 +250,7 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       });
 
       log('Upload process completed successfully');
+      log('Session link: ${dotenv.env['FRONTEND_URL']}/session/$_sessionLink');
     } catch (e, stackTrace) {
       log('Error during upload process: $e');
       log('Stack trace: $stackTrace');

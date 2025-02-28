@@ -33,10 +33,9 @@ ENV/
 *.swp
 *.swo
 
+# Local development
+*.sqlite3
+*.db
+
 # Logs
 *.log
-
-# Local development
-.DS_Store
-.coverage
-htmlcov/
