@@ -1,480 +1,393 @@
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
-import 'package:dio/dio.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:convert';
-
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'dart:io' as io;
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'dart:html' as html;
-import 'dart:async';
-import 'screens/session_view.dart';
+import 'package:photoshare/screens/sessionModels.dart';
+import 'package:photoshare/screens/session_view.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:uuid/uuid.dart';
 
-// Add logging function
-void log(String message) {
-  print('${DateTime.now()} - $message');
-}
-
-Future<void> main() async {
+void main() async {
+  // Ensure Flutter is initialized
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load environment variables
   await dotenv.load(fileName: ".env");
-  log('Environment loaded. API URL: ${dotenv.env['API_URL']}');
+
   runApp(const MyApp());
 }
 
+// Web image class to handle images on web platform
+class WebImage {
+  final XFile file;
+  final String url;
+
+  WebImage({required this.file, required this.url});
+}
+
+// A class to handle both web and mobile images
+class CrossPlatformImage {
+  final XFile originalFile;
+  final dynamic platformFile; // File for mobile, html.File for web
+  final String? previewUrl; // For web only
+
+  CrossPlatformImage({
+    required this.originalFile,
+    required this.platformFile,
+    this.previewUrl,
+  });
+}
+
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'PhotoShare',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
+        primarySwatch: Colors.blue,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      initialRoute: '/',
-      onGenerateRoute: (settings) {
-        if (settings.name?.startsWith('/session/') ?? false) {
-          final sessionId = settings.name!.substring('/session/'.length);
-          return MaterialPageRoute(
-            builder: (context) => SessionView(sessionId: sessionId),
-          );
-        }
-        return MaterialPageRoute(
-          builder: (context) => const PhotoUploadPage(),
-        );
-      },
+      home: const PhotoShareApp(),
     );
   }
 }
 
-class PhotoUploadPage extends StatefulWidget {
-  const PhotoUploadPage({super.key});
+class PhotoShareApp extends StatefulWidget {
+  const PhotoShareApp({Key? key}) : super(key: key);
 
   @override
-  State<PhotoUploadPage> createState() => _PhotoUploadPageState();
+  _PhotoShareAppState createState() => _PhotoShareAppState();
 }
 
-class _PhotoUploadPageState extends State<PhotoUploadPage> {
-  final _eventIdController = TextEditingController();
-  final List<XFile> _selectedPhotos = [];
+class _PhotoShareAppState extends State<PhotoShareApp> {
+  final ImagePicker _picker = ImagePicker();
+  final List<CrossPlatformImage> _selectedImages = [];
   bool _isUploading = false;
-  String? _sessionLink;
-  String? _sessionPassword;
-  String? _errorMessage;
-  bool _isLocalUploading = false;
+  String _statusMessage = '';
+  bool _isProduction = false;
+  SessionResponse? _sessionResponse;
+  bool _useDirectUpload =
+      true; // Toggle between direct upload and presigned URLs
 
+  // Environment URLs
+  final String _localApiUrl = 'http://localhost:8000';
+  final String _productionApiUrl = 'https://photoshare-dn8f.onrender.com';
+
+  // Get current API URL based on environment
+  String get _apiBaseUrl => _isProduction ? _productionApiUrl : _localApiUrl;
+
+  // Event ID controller
+  final TextEditingController _eventIdController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Generate a random event ID if none provided
+    _eventIdController.text = const Uuid().v4();
+  }
+
+  @override
+  void dispose() {
+    _eventIdController.dispose();
+    super.dispose();
+  }
+
+  // Pick images from gallery
   Future<void> _pickImages() async {
     try {
-      final ImagePicker picker = ImagePicker();
-      final List<XFile> images = await picker.pickMultiImage();
+      final List<XFile> pickedFiles = await _picker.pickMultiImage();
 
-      if (images.isNotEmpty) {
-        log('Selected ${images.length} images');
+      if (pickedFiles.isNotEmpty) {
+        final newImages = <CrossPlatformImage>[];
+
+        for (var xFile in pickedFiles) {
+          if (kIsWeb) {
+            // On web, create previewUrl from XFile
+            newImages.add(CrossPlatformImage(
+              originalFile: xFile,
+              platformFile: xFile, // For web, we just keep the XFile
+              previewUrl:
+                  xFile.path, // On web, xFile.path is already a blob URL
+            ));
+          } else {
+            // On mobile, create a File
+            newImages.add(CrossPlatformImage(
+              originalFile: xFile,
+              platformFile: io.File(xFile.path),
+              previewUrl: null,
+            ));
+          }
+        }
+
         setState(() {
-          _selectedPhotos.addAll(images);
+          _selectedImages.addAll(newImages);
+          _statusMessage = 'Selected ${_selectedImages.length} images';
         });
       }
     } catch (e) {
-      log('Error picking images: $e');
       setState(() {
-        _errorMessage = 'Failed to pick images: $e';
+        _statusMessage = 'Error picking images: $e';
       });
+      print('Error picking images: $e');
     }
   }
 
-  Future<bool> _uploadToS3(String presignedUrl, XFile photo) async {
-    try {
-      final bytes = await photo.readAsBytes();
-      log('File size: ${bytes.length} bytes');
-      log('Presigned URL length: ${presignedUrl.length} characters');
-      log('Presigned URL first 50 chars: ${presignedUrl.substring(0, presignedUrl.length > 50 ? 50 : presignedUrl.length)}...');
-
-      if (kIsWeb) {
-        // Use fetch API for web uploads
-        final blob = html.Blob([bytes], 'image/jpeg');
-        final completer = Completer<bool>();
-
-        final uploadRequest = html.HttpRequest();
-        uploadRequest.open('PUT', presignedUrl);
-        uploadRequest.setRequestHeader('Content-Type', 'image/jpeg');
-
-        uploadRequest.onLoad.listen((event) {
-          log('Upload response status: ${uploadRequest.status}');
-          log('Upload response text: ${uploadRequest.responseText}');
-          final status = uploadRequest.status ?? 0;
-          if (status >= 200 && status < 300) {
-            completer.complete(true);
-          } else {
-            log('Upload failed with status: $status');
-            log('Response text: ${uploadRequest.responseText}');
-            completer.complete(false);
-          }
-        });
-
-        uploadRequest.onError.listen((event) {
-          log('Upload error: ${uploadRequest.responseText}');
-          log('Error type: ${event.type}');
-          completer.complete(false);
-        });
-
-        uploadRequest.send(blob);
-        return await completer.future;
-      } else {
-        // Use dio package for mobile
-        final dioClient = Dio();
-
-        // Log request details before sending
-        log('Making PUT request to presigned URL with content-type: image/jpeg');
-        log('File size to upload: ${bytes.length} bytes');
-
-        try {
-          final response = await dioClient.put(
-            presignedUrl,
-            data: Stream.fromIterable([bytes]),
-            options: Options(
-              headers: {
-                'Content-Type': 'image/jpeg',
-              },
-              followRedirects: true,
-              validateStatus: (status) => status! < 400,
-              receiveTimeout: const Duration(minutes: 5),
-              sendTimeout: const Duration(minutes: 5),
-            ),
-          );
-
-          log('Upload response status: ${response.statusCode}');
-          log('Upload response headers: ${response.headers}');
-
-          if (response.statusCode! >= 200 && response.statusCode! < 300) {
-            log('Upload successful');
-            return true;
-          } else {
-            log('Upload failed with status: ${response.statusCode}');
-            log('Response data: ${response.data}');
-            return false;
-          }
-        } on DioException catch (dioError) {
-          log('Dio error during upload: ${dioError.message}');
-          log('Error type: ${dioError.type}');
-          log('Response status code: ${dioError.response?.statusCode}');
-          log('Response data: ${dioError.response?.data}');
-          return false;
-        }
-      }
-    } catch (e, stackTrace) {
-      log('Error in _uploadToS3: $e');
-      log('Stack trace: $stackTrace');
-      return false;
-    }
+  // Clear selected images
+  void _clearImages() {
+    setState(() {
+      _selectedImages.clear();
+      _statusMessage = 'Cleared all images';
+    });
   }
 
-  Future<void> _uploadPhotos() async {
-    if (_eventIdController.text.isEmpty) {
+  // Upload images using the appropriate method
+  Future<void> _uploadImages() async {
+    if (_selectedImages.isEmpty) {
       setState(() {
-        _errorMessage = 'Please enter an event ID';
+        _statusMessage = 'Please select images first';
       });
       return;
     }
 
-    if (_selectedPhotos.isEmpty) {
+    final String eventId = _eventIdController.text.trim();
+    if (eventId.isEmpty) {
       setState(() {
-        _errorMessage = 'Please select photos to upload';
+        _statusMessage = 'Please enter an event ID';
       });
       return;
     }
 
     setState(() {
       _isUploading = true;
-      _errorMessage = null;
+      _statusMessage = 'Starting upload process...';
+      _sessionResponse = null; // Reset any previous session
     });
 
     try {
-      log('Starting upload process for ${_selectedPhotos.length} photos');
+      List<String> uploadedUrls = [];
 
-      // 1. Get presigned URLs
-      final baseUrl = '${dotenv.env['API_URL']}/api/v1';
-      final url = Uri.parse('$baseUrl/upload');
-      log('Making request to: $url');
+      if (_useDirectUpload) {
+        // Direct upload approach - returns List<String> with file URLs
+        uploadedUrls = await _uploadImagesDirectly(eventId);
+      } else {
+        // Presigned URL approach - returns List<String> with presigned URLs
+        // We need to convert these to public URLs
+        final presignedUrls = await _uploadImagesWithPresignedUrls(eventId);
 
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode({
-          'event_id': _eventIdController.text,
-          'num_photos': _selectedPhotos.length,
-        }),
-      );
-
-      log('Presigned URLs response status: ${response.statusCode}');
-      log('Presigned URLs response headers: ${response.headers}');
-      log('Presigned URLs response body: ${response.body}');
-
-      if (response.statusCode != 200) {
-        throw Exception(
-            'Failed to get upload URLs: ${response.statusCode} - ${response.body}');
+        // For simplicity, we'll just use the presigned URLs directly
+        // In a real app, you might need to construct proper S3 URLs
+        uploadedUrls = presignedUrls;
       }
 
-      final Map<String, dynamic> presignedData;
-      try {
-        presignedData = jsonDecode(response.body);
-        log('Successfully decoded JSON response');
-      } catch (e) {
-        log('Error decoding JSON response: $e');
-        throw Exception(
-            'Invalid response format from server: ${response.body}');
-      }
-
-      if (!presignedData.containsKey('presigned_urls') ||
-          !presignedData.containsKey('session_id')) {
-        log('Response missing required fields: $presignedData');
-        throw Exception(
-            'Server response missing required fields: ${response.body}');
-      }
-
-      final List<String> presignedUrls =
-          List<String>.from(presignedData['presigned_urls']);
-      final String uploadSessionId = presignedData['session_id'];
-
-      log('Received ${presignedUrls.length} presigned URLs');
-      log('Upload session ID: $uploadSessionId');
-
-      // Validate presigned URLs
-      if (presignedUrls.isEmpty) {
-        throw Exception('No presigned URLs received from server');
-      }
-
-      for (var i = 0; i < presignedUrls.length; i++) {
-        final url = presignedUrls[i];
-        if (url.isEmpty) {
-          log('Warning: Empty presigned URL at index $i');
-        } else if (!url.startsWith('http')) {
-          log('Warning: Invalid presigned URL format at index $i: ${url.substring(0, url.length > 50 ? 50 : url.length)}...');
-        }
-      }
-
-      // 2. Upload photos using presigned URLs
-      final List<String> uploadedUrls = [];
-      final List<String> failedUploads = [];
-
-      for (var i = 0; i < _selectedPhotos.length; i++) {
-        if (i >= presignedUrls.length) break;
-
-        final photo = _selectedPhotos[i];
-        log('Uploading photo ${i + 1}/${_selectedPhotos.length}: ${photo.path}');
-
-        try {
-          final success = await _uploadToS3(presignedUrls[i], photo);
-          if (success) {
-            final uploadedUrl = presignedUrls[i].split('?')[0];
-            uploadedUrls.add(uploadedUrl);
-            log('Successfully uploaded to: $uploadedUrl');
-          } else {
-            log('Failed to upload photo ${i + 1}');
-            failedUploads.add('Photo ${i + 1}: ${photo.name}');
-          }
-        } catch (e) {
-          log('Error uploading photo ${i + 1}: $e');
-          failedUploads.add('Photo ${i + 1}: ${photo.name} - Error: $e');
-        }
-      }
-
-      if (uploadedUrls.isEmpty) {
-        if (failedUploads.isNotEmpty) {
-          throw Exception(
-              'Failed to upload any photos. Errors: ${failedUploads.join(", ")}');
-        } else {
-          throw Exception('Failed to upload any photos');
-        }
-      }
-
-      log('Successfully uploaded ${uploadedUrls.length} photos');
-      if (failedUploads.isNotEmpty) {
-        log('Failed uploads: ${failedUploads.join(", ")}');
-      }
-
-      // 3. Create session with uploaded photos
-      log('Creating session for uploaded photos');
-      final sessionUrl = Uri.parse('$baseUrl/session/create');
-      final sessionResponse = await http.post(
-        sessionUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode({
-          'event_id': _eventIdController.text,
-          'photo_urls': uploadedUrls,
-        }),
-      );
-
-      log('Session creation response: ${sessionResponse.statusCode}');
-      log('Session creation body: ${sessionResponse.body}');
-
-      if (sessionResponse.statusCode != 200) {
-        throw Exception(
-            'Failed to create session: ${sessionResponse.statusCode} - ${sessionResponse.body}');
-      }
-
-      final sessionData = jsonDecode(sessionResponse.body);
+      // Create a session with the uploaded photos
       setState(() {
-        _sessionLink = sessionData['access_link'];
-        _sessionPassword = sessionData['password'];
-        _isUploading = false;
-        _errorMessage = null;
+        _statusMessage = 'Creating sharing session...';
       });
 
-      log('Upload process completed successfully');
-      log('Session link: ${dotenv.env['FRONTEND_URL']}/session/$_sessionLink');
-    } catch (e, stackTrace) {
-      log('Error during upload process: $e');
-      log('Stack trace: $stackTrace');
+      final session = await createSession(eventId, uploadedUrls);
+
       setState(() {
-        _errorMessage = 'Upload failed: ${e.toString()}';
+        _sessionResponse = session;
+        _statusMessage = 'Upload complete and session created!';
+      });
+    } catch (e) {
+      print('Error during upload process: $e');
+      setState(() {
+        _statusMessage = 'Upload failed: $e';
+      });
+    } finally {
+      setState(() {
         _isUploading = false;
       });
     }
   }
 
-  Future<void> _uploadPhotosLocally() async {
-    if (_eventIdController.text.isEmpty) {
-      setState(() {
-        _errorMessage = 'Please enter an event ID';
-      });
-      return;
-    }
-
-    if (_selectedPhotos.isEmpty) {
-      setState(() {
-        _errorMessage = 'Please select photos to upload';
-      });
-      return;
-    }
-
-    setState(() {
-      _isLocalUploading = true;
-      _errorMessage = null;
-    });
-
+  // Direct upload method (new approach)
+  Future<List<String>> _uploadImagesDirectly(String eventId) async {
     try {
-      log('Starting local upload process for ${_selectedPhotos.length} photos');
-      log('Selected photos paths: ${_selectedPhotos.map((p) => p.path).join(", ")}');
+      setState(() {
+        _statusMessage = 'Uploading images directly...';
+      });
 
-      // 1. Get presigned URLs from local server
-      const localUrl = 'http://localhost:8000/api/v1/upload';
-      final url = Uri.parse(localUrl);
-      log('Making request to local server: $url');
-      log('Request headers: ${jsonEncode({
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          })}');
-      log('Request body: ${jsonEncode({
-            'event_id': _eventIdController.text,
-            'num_photos': _selectedPhotos.length,
-          })}');
+      // Create a multipart request
+      final uri = Uri.parse('$_apiBaseUrl/api/v1/upload-multiple-photos');
+      final request = http.MultipartRequest('POST', uri);
 
-      final stopwatch = Stopwatch()..start();
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode({
-          'event_id': _eventIdController.text,
-          'num_photos': _selectedPhotos.length,
-        }),
-      );
-      stopwatch.stop();
-      log('Request took ${stopwatch.elapsedMilliseconds}ms to complete');
+      // Add event_id as a form field
+      request.fields['event_id'] = eventId;
 
-      log('Local presigned URLs response status: ${response.statusCode}');
-      log('Local presigned URLs response headers: ${response.headers}');
-      log('Local presigned URLs response body: ${response.body}');
+      // Add all files to the request
+      for (var image in _selectedImages) {
+        final fileName = image.originalFile.name;
 
-      if (response.statusCode != 200) {
-        throw Exception(
-            'Failed to get upload URLs from local server: ${response.statusCode} - ${response.body}');
-      }
+        if (kIsWeb) {
+          // For web, read the file as bytes from XFile
+          final bytes = await image.originalFile.readAsBytes();
 
-      final presignedData = jsonDecode(response.body);
-      final List<String> presignedUrls =
-          List<String>.from(presignedData['presigned_urls']);
-      final String uploadSessionId = presignedData['session_id'];
-
-      log('Received ${presignedUrls.length} presigned URLs from local server');
-      log('Local upload session ID: $uploadSessionId');
-
-      // 2. Upload photos using presigned URLs
-      final List<String> uploadedUrls = [];
-
-      for (var i = 0; i < _selectedPhotos.length; i++) {
-        if (i >= presignedUrls.length) break;
-
-        final photo = _selectedPhotos[i];
-        log('Uploading photo ${i + 1}/${_selectedPhotos.length} to local: ${photo.path}');
-
-        final success = await _uploadToS3(presignedUrls[i], photo);
-        if (success) {
-          final uploadedUrl = presignedUrls[i].split('?')[0];
-          uploadedUrls.add(uploadedUrl);
-          log('Successfully uploaded to local: $uploadedUrl');
+          final multipartFile = http.MultipartFile.fromBytes(
+            'files',
+            bytes,
+            filename: fileName,
+          );
+          request.files.add(multipartFile);
         } else {
-          log('Failed to upload photo ${i + 1} to local server');
+          // For mobile, use the File object's stream
+          final file = image.platformFile as io.File;
+          final fileStream = http.ByteStream(file.openRead());
+          final length = await file.length();
+
+          final multipartFile = http.MultipartFile(
+            'files', // This must match the parameter name in your FastAPI endpoint
+            fileStream,
+            length,
+            filename: fileName,
+          );
+          request.files.add(multipartFile);
         }
       }
 
-      if (uploadedUrls.isEmpty) {
-        throw Exception('Failed to upload any photos to local server');
+      // Send the request
+      setState(() {
+        _statusMessage = 'Sending files to server...';
+      });
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
+        setState(() {
+          _statusMessage =
+              'Upload successful! Uploaded ${responseData['uploaded_files'].length} files.';
+        });
+        print('Direct upload response: ${response.body}');
+
+        // Extract file URLs from the response
+        final List<dynamic> uploadedFiles = responseData['uploaded_files'];
+        return uploadedFiles
+            .map<String>((item) => item['file_url'] as String)
+            .toList();
+      } else {
+        throw Exception(
+            'Failed to upload images: ${response.statusCode} - ${response.body}');
       }
+    } catch (e) {
+      print('Error during direct upload: $e');
+      setState(() {
+        _statusMessage = 'Direct upload failed: $e';
+      });
+      rethrow;
+    }
+  }
 
-      log('Successfully uploaded ${uploadedUrls.length} photos to local server');
+  // Presigned URL upload method (original approach)
+  Future<List<String>> _uploadImagesWithPresignedUrls(String eventId) async {
+    try {
+      setState(() {
+        _statusMessage = 'Getting presigned URLs...';
+      });
 
-      // 3. Create session with uploaded photos
-      log('Creating local session for uploaded photos');
-      final sessionUrl =
-          Uri.parse('http://localhost:8000/api/v1/session/create');
-      final sessionResponse = await http.post(
-        sessionUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+      // Get presigned URLs
+      final presignedUrlsResponse = await http.post(
+        Uri.parse('$_apiBaseUrl/api/v1/generate-upload-urls'),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'event_id': _eventIdController.text,
-          'photo_urls': uploadedUrls,
+          'event_id': eventId,
+          'num_photos': _selectedImages.length,
         }),
       );
 
-      log('Local session creation response: ${sessionResponse.statusCode}');
-      log('Local session creation body: ${sessionResponse.body}');
+      print(
+          'Presigned URLs response status: ${presignedUrlsResponse.statusCode}');
+      print('Presigned URLs response body: ${presignedUrlsResponse.body}');
 
-      if (sessionResponse.statusCode != 200) {
+      if (presignedUrlsResponse.statusCode != 200) {
         throw Exception(
-            'Failed to create local session: ${sessionResponse.statusCode} - ${sessionResponse.body}');
+            'Failed to get upload URLs from ${_isProduction ? "production" : "local"} server: ${presignedUrlsResponse.statusCode} - ${presignedUrlsResponse.body}');
       }
 
-      final sessionData = jsonDecode(sessionResponse.body);
+      final presignedData = jsonDecode(presignedUrlsResponse.body);
+      final List<String> presignedUrls =
+          List<String>.from(presignedData['presigned_urls']);
+      final String sessionId = presignedData['session_id'];
+
       setState(() {
-        _sessionLink = sessionData['access_link'];
-        _sessionPassword = sessionData['password'];
-        _isLocalUploading = false;
-        _errorMessage = null;
+        _statusMessage =
+            'Got ${presignedUrls.length} presigned URLs. Uploading files...';
       });
 
-      log('Local upload process completed successfully');
-      log('Local session link: http://localhost:53701/session/$_sessionLink');
-    } catch (e, stackTrace) {
-      log('Error during local upload process: $e');
-      log('Stack trace: $stackTrace');
+      // Upload each file using its presigned URL
+      for (int i = 0;
+          i < _selectedImages.length && i < presignedUrls.length;
+          i++) {
+        final image = _selectedImages[i];
+        final presignedUrl = presignedUrls[i];
+
+        setState(() {
+          _statusMessage =
+              'Uploading file ${i + 1} of ${_selectedImages.length}...';
+        });
+
+        // Read file as bytes
+        final bytes = await image.originalFile.readAsBytes();
+
+        // Upload to S3 using presigned URL
+        final uploadResponse = await http.put(
+          Uri.parse(presignedUrl),
+          headers: {'Content-Type': 'image/jpeg'},
+          body: bytes,
+        );
+
+        if (uploadResponse.statusCode != 200) {
+          throw Exception(
+              'Failed to upload file ${i + 1}: ${uploadResponse.statusCode}');
+        }
+      }
+
       setState(() {
-        _errorMessage = 'Local upload failed: ${e.toString()}';
-        _isLocalUploading = false;
+        _statusMessage = 'Upload successful! Session ID: $sessionId';
       });
+
+      // Return the presigned URLs
+      return presignedUrls;
+    } catch (e) {
+      print('Error during presigned URL upload: $e');
+      setState(() {
+        _statusMessage = 'Presigned URL upload failed: $e';
+      });
+      rethrow;
+    }
+  }
+
+  // Function to create a session with the uploaded photos
+  Future<SessionResponse> createSession(
+      String eventId, List<String> photoUrls) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/api/v1/session/create'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'event_id': eventId,
+          'photo_urls': photoUrls,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
+        return SessionResponse.fromJson(responseData);
+      } else {
+        throw Exception(
+            'Failed to create session: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      print('Error creating session: $e');
+      rethrow;
     }
   }
 
@@ -482,108 +395,313 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('PhotoShare Upload'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: const Text('PhotoShare'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _eventIdController,
-              decoration: const InputDecoration(
-                labelText: 'Event ID',
-                hintText: 'Enter a unique event identifier',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _pickImages,
-              icon: const Icon(Icons.photo_library),
-              label: const Text('Select Photos'),
-            ),
-            const SizedBox(height: 8),
-            Text('${_selectedPhotos.length} photos selected'),
-            const SizedBox(height: 16),
-            if (_errorMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: Text(
-                  _errorMessage!,
-                  style: const TextStyle(color: Colors.red),
-                ),
-              ),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isUploading ? null : _uploadPhotos,
-                    child: _isUploading
-                        ? const CircularProgressIndicator()
-                        : const Text('Upload to Production'),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Environment toggle
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Settings',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Environment:'),
+                          Row(
+                            children: [
+                              const Text('Local'),
+                              Switch(
+                                value: _isProduction,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _isProduction = value;
+                                  });
+                                  print(
+                                      'Switched to ${_isProduction ? "production" : "local"} environment');
+                                },
+                              ),
+                              const Text('Production'),
+                            ],
+                          ),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Upload Method:'),
+                          Row(
+                            children: [
+                              const Text('Presigned URLs'),
+                              Switch(
+                                value: _useDirectUpload,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _useDirectUpload = value;
+                                  });
+                                  print(
+                                      'Switched to ${_useDirectUpload ? "direct upload" : "presigned URLs"}');
+                                },
+                              ),
+                              const Text('Direct Upload'),
+                            ],
+                          ),
+                        ],
+                      ),
+                      Text('API URL: $_apiBaseUrl',
+                          style: const TextStyle(fontSize: 12)),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isLocalUploading ? null : _uploadPhotosLocally,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.black,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: _isLocalUploading
-                        ? const CircularProgressIndicator(
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
-                          )
-                        : const Text('Upload to Local'),
-                  ),
-                ),
-              ],
-            ),
-            if (_sessionLink != null && _sessionPassword != null) ...[
-              const SizedBox(height: 24),
-              const Text(
-                'Upload Complete!',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              SelectableText(
-                'Session Link: ${dotenv.env['FRONTEND_URL']}/session/$_sessionLink',
-                style: const TextStyle(fontSize: 16),
-              ),
-              SelectableText(
-                'Password: $_sessionPassword',
-                style: const TextStyle(fontSize: 16),
               ),
               const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () {
-                  final link =
-                      '${dotenv.env['FRONTEND_URL']}/session/$_sessionLink';
-                  // Copy to clipboard
-                  if (kIsWeb) {
-                    html.window.navigator.clipboard?.writeText(link);
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copied to clipboard')),
-                  );
-                },
-                icon: const Icon(Icons.copy),
-                label: const Text('Copy Link'),
+
+              // Event ID input
+              TextField(
+                controller: _eventIdController,
+                decoration: const InputDecoration(
+                  labelText: 'Event ID',
+                  border: OutlineInputBorder(),
+                  hintText: 'Enter event ID or use generated one',
+                ),
               ),
+              const SizedBox(height: 16),
+
+              // Image selection and upload buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _pickImages,
+                      icon: const Icon(Icons.photo_library),
+                      label: const Text('Select Images'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _clearImages,
+                      icon: const Icon(Icons.clear),
+                      label: const Text('Clear Images'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: _isUploading ? null : _uploadImages,
+                icon: const Icon(Icons.cloud_upload),
+                label: Text(_isUploading ? 'Uploading...' : 'Upload Images'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Status message
+              if (_statusMessage.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  color: _statusMessage.contains('failed') ||
+                          _statusMessage.contains('Error')
+                      ? Colors.red[100]
+                      : Colors.green[100],
+                  child: Text(_statusMessage),
+                ),
+              const SizedBox(height: 16),
+              if (_sessionResponse != null)
+                _buildSessionDetailsCard(_sessionResponse!),
+
+              // Selected images preview
+              Container(
+                height: 300, // Fixed height for the grid
+                child: _selectedImages.isEmpty
+                    ? const Center(child: Text('No images selected'))
+                    : GridView.builder(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 4,
+                          mainAxisSpacing: 4,
+                        ),
+                        itemCount: _selectedImages.length,
+                        itemBuilder: (context, index) {
+                          final image = _selectedImages[index];
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              // Display image based on platform
+                              kIsWeb
+                                  ? Image.network(
+                                      image.previewUrl!,
+                                      fit: BoxFit.cover,
+                                    )
+                                  : Image.file(
+                                      image.platformFile as io.File,
+                                      fit: BoxFit.cover,
+                                    ),
+                              Positioned(
+                                top: 0,
+                                right: 0,
+                                child: Container(
+                                  color: Colors.black54,
+                                  child: Text(
+                                    '${index + 1}',
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+              )
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _eventIdController.dispose();
-    super.dispose();
+  // Add this widget to display session details
+  Widget _buildSessionDetailsCard(SessionResponse session) {
+    return Card(
+      elevation: 4,
+      margin: const EdgeInsets.all(16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Session Created Successfully!',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+
+            // Session Link with copy button
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Share Link:',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text(
+                        session.sessionLink,
+                        style: const TextStyle(color: Colors.blue),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: session.sessionLink));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Link copied to clipboard')),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Password with copy button
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Password:',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text(
+                        session.password,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', letterSpacing: 1.5),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: session.password));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text('Password copied to clipboard')),
+                    );
+                  },
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            // Copy both at once button
+            ElevatedButton.icon(
+              onPressed: () {
+                final textToCopy =
+                    'View photos at: ${session.sessionLink}\nPassword: ${session.password}';
+                Clipboard.setData(ClipboardData(text: textToCopy));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text('Link and password copied to clipboard')),
+                );
+              },
+              icon: const Icon(Icons.copy_all),
+              label: const Text('Copy Link & Password'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.deepPurple,
+                foregroundColor: Colors.white,
+              ),
+            ),
+
+            // Add view session button
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () {
+                // Extract session ID from the session link
+                final uri = Uri.parse(session.sessionLink);
+                final pathSegments = uri.pathSegments;
+                if (pathSegments.length >= 2 && pathSegments[0] == 'session') {
+                  final sessionId = pathSegments[1];
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => SessionView(sessionId: sessionId),
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Invalid session link format')),
+                  );
+                }
+              },
+              icon: const Icon(Icons.photo_library),
+              label: const Text('View Photos'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
