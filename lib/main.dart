@@ -88,6 +88,8 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
     try {
       final bytes = await photo.readAsBytes();
       log('File size: ${bytes.length} bytes');
+      log('Presigned URL length: ${presignedUrl.length} characters');
+      log('Presigned URL first 50 chars: ${presignedUrl.substring(0, presignedUrl.length > 50 ? 50 : presignedUrl.length)}...');
 
       if (kIsWeb) {
         // Use fetch API for web uploads
@@ -105,12 +107,15 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
           if (status >= 200 && status < 300) {
             completer.complete(true);
           } else {
+            log('Upload failed with status: $status');
+            log('Response text: ${uploadRequest.responseText}');
             completer.complete(false);
           }
         });
 
         uploadRequest.onError.listen((event) {
           log('Upload error: ${uploadRequest.responseText}');
+          log('Error type: ${event.type}');
           completer.complete(false);
         });
 
@@ -119,20 +124,44 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       } else {
         // Use dio package for mobile
         final dioClient = Dio();
-        final response = await dioClient.put(
-          presignedUrl,
-          data: Stream.fromIterable([bytes]),
-          options: Options(
-            headers: {
-              'Content-Type': 'image/jpeg',
-            },
-            followRedirects: true,
-            validateStatus: (status) => status! < 400,
-          ),
-        );
 
-        log('Upload response status: ${response.statusCode}');
-        return response.statusCode == 200;
+        // Log request details before sending
+        log('Making PUT request to presigned URL with content-type: image/jpeg');
+        log('File size to upload: ${bytes.length} bytes');
+
+        try {
+          final response = await dioClient.put(
+            presignedUrl,
+            data: Stream.fromIterable([bytes]),
+            options: Options(
+              headers: {
+                'Content-Type': 'image/jpeg',
+              },
+              followRedirects: true,
+              validateStatus: (status) => status! < 400,
+              receiveTimeout: const Duration(minutes: 5),
+              sendTimeout: const Duration(minutes: 5),
+            ),
+          );
+
+          log('Upload response status: ${response.statusCode}');
+          log('Upload response headers: ${response.headers}');
+
+          if (response.statusCode! >= 200 && response.statusCode! < 300) {
+            log('Upload successful');
+            return true;
+          } else {
+            log('Upload failed with status: ${response.statusCode}');
+            log('Response data: ${response.data}');
+            return false;
+          }
+        } on DioException catch (dioError) {
+          log('Dio error during upload: ${dioError.message}');
+          log('Error type: ${dioError.type}');
+          log('Response status code: ${dioError.response?.statusCode}');
+          log('Response data: ${dioError.response?.data}');
+          return false;
+        }
       }
     } catch (e, stackTrace) {
       log('Error in _uploadToS3: $e');

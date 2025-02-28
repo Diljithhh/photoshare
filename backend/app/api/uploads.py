@@ -94,8 +94,32 @@ async def generate_upload_urls(request: UploadRequest):
     try:
         # Test S3 client connection
         logger.info("Testing S3 client connection...")
-        buckets = s3_client.list_buckets()
-        logger.info(f"Available buckets: {[b['Name'] for b in buckets['Buckets']]}")
+        try:
+            buckets = s3_client.list_buckets()
+            logger.info(f"Available buckets: {[b['Name'] for b in buckets['Buckets']]}")
+
+            # Check if our target bucket exists in the list
+            bucket_exists = False
+            for bucket in buckets['Buckets']:
+                if bucket['Name'] == BUCKET_NAME:
+                    bucket_exists = True
+                    break
+
+            if not bucket_exists:
+                logger.error(f"Target bucket '{BUCKET_NAME}' not found in available buckets")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Target bucket '{BUCKET_NAME}' not found in AWS account"
+                )
+        except ClientError as e:
+            error_response = e.response.get('Error', {})
+            error_code = error_response.get('Code', 'Unknown')
+            error_message = error_response.get('Message', str(e))
+            logger.error(f"Failed to list buckets: Code={error_code}, Message={error_message}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to connect to AWS S3: {error_code} - {error_message}"
+            )
 
         # Generate a unique session ID
         session_id = str(uuid.uuid4())
@@ -123,6 +147,9 @@ async def generate_upload_urls(request: UploadRequest):
                     ExpiresIn=EXPIRATION
                 )
                 logger.info(f"Successfully generated presigned URL for {file_key}")
+                logger.info(f"URL length: {len(presigned_url)} characters")
+                # Log a truncated version of the URL for debugging (first 50 chars)
+                logger.info(f"URL preview: {presigned_url[:50]}...")
                 presigned_urls.append(presigned_url)
 
             except ClientError as e:
@@ -136,13 +163,22 @@ async def generate_upload_urls(request: UploadRequest):
                 )
 
         logger.info(f"Successfully generated {len(presigned_urls)} presigned URLs")
-        return PresignedURLResponse(
+        response = PresignedURLResponse(
             session_id=session_id,
             presigned_urls=presigned_urls
         )
+        # Log the first URL (truncated) to verify it's being returned correctly
+        if presigned_urls:
+            logger.info(f"First URL in response (truncated): {presigned_urls[0][:50]}...")
+        return response
 
+    except HTTPException:
+        # Re-raise HTTP exceptions without wrapping them
+        raise
     except Exception as e:
         logger.error(f"Unexpected error in generate_upload_urls: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         if isinstance(e, ClientError):
             error_response = e.response.get('Error', {})
             error_code = error_response.get('Code', 'Unknown')
