@@ -1,0 +1,24 @@
+version: 1
+applications:
+  - frontend:
+      phases:
+        preBuild:
+          commands:
+            - git clone https://github.com/flutter/flutter.git
+            - export PATH="$PATH:`pwd`/flutter/bin"
+            - flutter channel stable
+            - flutter upgrade
+            - flutter config --enable-web
+            - flutter doctor -v
+            - flutter pub get
+        build:
+          commands:
+            - flutter build web --release
+      artifacts:
+        baseDirectory: build/web
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - flutter
+          - .pub-cache
