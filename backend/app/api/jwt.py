@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from app.services.jwt import create_access_token, get_current_session, verify_password
 from app.models.imageview import PasswordAuth, Token, PhotoList, SelectionResponse
 from app.services.dynamodb import get_dynamodb_client
+from botocore.exceptions import ClientError
 
 from app.core.jwt import TABLE_NAME, ACCESS_TOKEN_EXPIRE_MINUTES
 
