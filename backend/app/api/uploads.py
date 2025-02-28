@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends
 import boto3
 from botocore.exceptions import ClientError
 import uuid
@@ -7,69 +7,156 @@ from typing import List
 import os
 from dotenv import load_dotenv
 import logging
+import io
+from pydantic import BaseModel
 
 # Load environment variables
 load_dotenv()
 
-# Initialize router
-router = APIRouter()
+# Initialize router with prefix to prevent duplication
+router = APIRouter(prefix="/api/v1")
 
 logger = logging.getLogger(__name__)
 
-# Use a bucket name pattern that matches a common AWS naming convention
-# The bucket name should be lowercase with hyphens, not spaces
-BUCKET_NAME = "photoshare-uploads"
+# Use your bucket name
+BUCKET_NAME = "screenmirror-canvas-storage"
 
-# Initialize S3 client
-logger.info("Initializing S3 client...")
-try:
-    s3_client = boto3.client(
+# Initialize S3 client as a dependency
+def get_s3_client():
+    return boto3.client(
         's3',
         region_name='ap-south-1',  # Mumbai region
         aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
         aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
     )
 
-    # Test S3 connection
-    logger.info("Testing S3 connection...")
-    bucket_list = s3_client.list_buckets()
-    logger.info(f"Available buckets: {[b['Name'] for b in bucket_list['Buckets']]}")
+@router.post("/upload-photo")
+async def upload_photo(
+    event_id: str = Form(...),
+    file: UploadFile = File(...),
+    s3_client = Depends(get_s3_client)
+):
+    """
+    Upload a single photo directly to S3 bucket
+    """
+    logger.info(f"Processing upload for event_id: {event_id}, filename: {file.filename}")
 
-    # Find a suitable bucket from the available ones
-    available_buckets = [b['Name'] for b in bucket_list['Buckets']]
-    logger.info(f"Looking for suitable bucket from available buckets: {available_buckets}")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Empty filename")
 
-    if BUCKET_NAME in available_buckets:
-        logger.info(f"Found configured bucket: {BUCKET_NAME}")
-    else:
-        # Try to find a suitable bucket or use the first available one
-        if available_buckets:
-            BUCKET_NAME = available_buckets[0]
-            logger.info(f"Using first available bucket: {BUCKET_NAME}")
-        else:
-            logger.error("No buckets found in AWS account")
-            raise Exception("No buckets found in AWS account")
+    try:
+        # Generate a unique ID for the file
+        file_id = str(uuid.uuid4())
 
-    # Verify bucket exists
-    logger.info(f"Verifying bucket {BUCKET_NAME} exists...")
-    s3_client.head_bucket(Bucket=BUCKET_NAME)
-    logger.info(f"Successfully verified bucket {BUCKET_NAME}")
+        # Create a unique key for the file
+        file_key = f"{event_id}/{file_id}/{file.filename}"
+        logger.info(f"Generated S3 key: {file_key}")
 
-except ClientError as e:
-    error_response = e.response.get('Error', {})
-    error_code = error_response.get('Code', 'Unknown')
-    error_message = error_response.get('Message', str(e))
-    logger.error(f"AWS Error: Code={error_code}, Message={error_message}")
-    logger.error(f"Error initializing S3 client or verifying bucket: {str(e)}")
-    raise
-except Exception as e:
-    logger.error(f"Unexpected error initializing S3: {str(e)}")
-    raise
+        # Create a BytesIO object from the file content
+        file_object = io.BytesIO(await file.read())
 
-# Constants
-MAX_PHOTOS = 500
-EXPIRATION = 3600  # URL expiration in seconds (1 hour)
+        # Upload to S3 using the file object
+        logger.info(f"Uploading file to S3: {file_key}")
+        s3_client.upload_fileobj(
+            file_object,
+            BUCKET_NAME,
+            file_key,
+            ExtraArgs={
+                "ContentType": file.content_type
+            }
+        )
+        logger.info(f"Successfully uploaded file to S3: {file_key}")
 
+        # Generate a URL to access the file (if public)
+        file_url = f"https://{BUCKET_NAME}.s3.ap-south-1.amazonaws.com/{file_key}"
+
+        return {
+            "success": True,
+            "file_id": file_id,
+            "file_key": file_key,
+            "file_url": file_url
+        }
+
+    except ClientError as e:
+        error_message = str(e)
+        logger.error(f"S3 ClientError while uploading file: {error_message}")
+        raise HTTPException(status_code=500, detail=f"Error uploading file: {error_message}")
+    except Exception as e:
+        logger.error(f"Unexpected error in upload_photo: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload photo: {str(e)}")
+    finally:
+        await file.close()
+
+@router.post("/upload-multiple-photos")
+async def upload_multiple_photos(
+    event_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+    s3_client = Depends(get_s3_client)
+):
+    """
+    Upload multiple photos directly to S3 bucket
+    """
+    logger.info(f"Processing multiple uploads for event_id: {event_id}, file count: {len(files)}")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    results = []
+    errors = []
+
+    # Generate a unique session ID for this batch
+    session_id = str(uuid.uuid4())
+    logger.info(f"Generated session_id for batch upload: {session_id}")
+
+    for file in files:
+        try:
+            if not file.filename:
+                errors.append({"error": "Empty filename"})
+                continue
+
+            # Create a unique key for the file
+            file_key = f"{event_id}/{session_id}/{file.filename}"
+
+            # Create a BytesIO object from the file content
+            file_object = io.BytesIO(await file.read())
+
+            # Upload to S3 using the file object
+            logger.info(f"Uploading file to S3: {file_key}")
+            s3_client.upload_fileobj(
+                file_object,
+                BUCKET_NAME,
+                file_key,
+                ExtraArgs={
+                    "ContentType": file.content_type
+                }
+            )
+            logger.info(f"Successfully uploaded file to S3: {file_key}")
+
+            # Generate a URL to access the file (if public)
+            file_url = f"https://{BUCKET_NAME}.s3.ap-south-1.amazonaws.com/{file_key}"
+
+            results.append({
+                "filename": file.filename,
+                "file_key": file_key,
+                "file_url": file_url
+            })
+        except Exception as e:
+            logger.error(f"Error uploading file {file.filename}: {str(e)}")
+            errors.append({
+                "filename": file.filename,
+                "error": str(e)
+            })
+        finally:
+            await file.close()
+
+    return {
+        "success": len(results) > 0,
+        "session_id": session_id,
+        "uploaded_files": results,
+        "errors": errors if errors else None
+    }
+
+# Keep the original presigned URL functionality with a different endpoint name
 class UploadRequest(BaseModel):
     event_id: str
     num_photos: int = 1  # Default to 1 if not specified
@@ -78,11 +165,12 @@ class PresignedURLResponse(BaseModel):
     session_id: str
     presigned_urls: List[str]
 
-@router.post("/upload", response_model=PresignedURLResponse)
-async def generate_upload_urls(request: UploadRequest):
-    logger = logging.getLogger(__name__)
-
-    # Log the entire request for debugging
+@router.post("/generate-upload-urls", response_model=PresignedURLResponse)
+async def generate_upload_urls(
+    request: UploadRequest,
+    s3_client = Depends(get_s3_client)
+):
+    """Generate presigned URLs for client-side uploads"""
     logger.info(f"Received upload request: {request.dict()}")
 
     # Validate request parameters
@@ -100,6 +188,7 @@ async def generate_upload_urls(request: UploadRequest):
             detail="num_photos must be greater than 0"
         )
 
+    MAX_PHOTOS = 500
     if request.num_photos > MAX_PHOTOS:
         logger.error(f"num_photos exceeds maximum limit: {request.num_photos}")
         raise HTTPException(
@@ -107,44 +196,7 @@ async def generate_upload_urls(request: UploadRequest):
             detail=f"num_photos cannot exceed {MAX_PHOTOS}"
         )
 
-    logger.info(f"Starting generate_upload_urls with event_id: {request.event_id}, num_photos: {request.num_photos}")
-
-    # Log AWS credentials status (without exposing sensitive data)
-    logger.info(f"AWS Access Key ID exists: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}")
-    logger.info(f"AWS Secret Access Key exists: {bool(os.getenv('AWS_SECRET_ACCESS_KEY'))}")
-    logger.info(f"AWS Region: {os.getenv('AWS_DEFAULT_REGION', 'not set')}")
-    logger.info(f"Using bucket: {BUCKET_NAME}")
-
     try:
-        # Test S3 client connection
-        logger.info("Testing S3 client connection...")
-        try:
-            buckets = s3_client.list_buckets()
-            logger.info(f"Available buckets: {[b['Name'] for b in buckets['Buckets']]}")
-
-            # Check if our target bucket exists in the list
-            bucket_exists = False
-            for bucket in buckets['Buckets']:
-                if bucket['Name'] == BUCKET_NAME:
-                    bucket_exists = True
-                    break
-
-            if not bucket_exists:
-                logger.error(f"Target bucket '{BUCKET_NAME}' not found in available buckets")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Target bucket '{BUCKET_NAME}' not found in AWS account"
-                )
-        except ClientError as e:
-            error_response = e.response.get('Error', {})
-            error_code = error_response.get('Code', 'Unknown')
-            error_message = error_response.get('Message', str(e))
-            logger.error(f"Failed to list buckets: Code={error_code}, Message={error_message}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to connect to AWS S3: {error_code} - {error_message}"
-            )
-
         # Generate a unique session ID
         session_id = str(uuid.uuid4())
         logger.info(f"Generated session_id: {session_id}")
@@ -153,68 +205,49 @@ async def generate_upload_urls(request: UploadRequest):
         presigned_urls = []
         logger.info(f"Generating {request.num_photos} presigned URLs")
 
+        EXPIRATION = 3600  # URL expiration in seconds (1 hour)
         for i in range(request.num_photos):
             # Create a unique key for each potential photo
             file_key = f"{request.event_id}/{session_id}/{i}.jpg"
             logger.info(f"Generating presigned URL for key: {file_key}")
 
-            try:
-                # Generate presigned URL
-                logger.info("Calling S3 generate_presigned_url")
-                presigned_url = s3_client.generate_presigned_url(
-                    'put_object',
-                    Params={
-                        'Bucket': BUCKET_NAME,
-                        'Key': file_key,
-                        'ContentType': 'image/jpeg'
-                    },
-                    ExpiresIn=EXPIRATION
-                )
-                logger.info(f"Successfully generated presigned URL for {file_key}")
-                logger.info(f"URL length: {len(presigned_url)} characters")
-                # Log a truncated version of the URL for debugging (first 50 chars)
-                logger.info(f"URL preview: {presigned_url[:50]}...")
-                presigned_urls.append(presigned_url)
-
-            except ClientError as e:
-                error_response = e.response.get('Error', {})
-                error_code = error_response.get('Code', 'Unknown')
-                error_message = error_response.get('Message', str(e))
-                logger.error(f"S3 ClientError while generating presigned URL: Code={error_code}, Message={error_message}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error generating presigned URL: {error_code} - {error_message}"
-                )
+            # Generate presigned URL
+            presigned_url = s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': BUCKET_NAME,
+                    'Key': file_key,
+                    'ContentType': 'image/jpeg'
+                },
+                ExpiresIn=EXPIRATION
+            )
+            logger.info(f"Successfully generated presigned URL for {file_key}")
+            presigned_urls.append(presigned_url)
 
         logger.info(f"Successfully generated {len(presigned_urls)} presigned URLs")
-        response = PresignedURLResponse(
+        return PresignedURLResponse(
             session_id=session_id,
             presigned_urls=presigned_urls
         )
-        # Log the first URL (truncated) to verify it's being returned correctly
-        if presigned_urls:
-            logger.info(f"First URL in response (truncated): {presigned_urls[0][:50]}...")
-        return response
 
-    except HTTPException:
-        # Re-raise HTTP exceptions without wrapping them
-        raise
+    except ClientError as e:
+        error_response = e.response.get('Error', {})
+        error_code = error_response.get('Code', 'Unknown')
+        error_message = error_response.get('Message', str(e))
+        logger.error(f"S3 ClientError: Code={error_code}, Message={error_message}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating presigned URL: {error_code} - {error_message}"
+        )
     except Exception as e:
         logger.error(f"Unexpected error in generate_upload_urls: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        if isinstance(e, ClientError):
-            error_response = e.response.get('Error', {})
-            error_code = error_response.get('Code', 'Unknown')
-            error_message = error_response.get('Message', str(e))
-            logger.error(f"AWS Error Details - Code: {error_code}, Message: {error_message}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate upload URLs: {str(e)}"
         )
 
 @router.get("/test-s3", response_model=dict)
-async def test_s3_connection():
+async def test_s3_connection(s3_client = Depends(get_s3_client)):
     """Test endpoint to verify S3 connectivity and bucket configuration"""
     try:
         # Check S3 connection
@@ -262,3 +295,160 @@ async def test_s3_connection():
             "status": "error",
             "message": f"Error testing S3 connection: {str(e)}"
         }
+
+#  # photo_upload.py
+
+# from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends
+# import boto3
+# from botocore.exceptions import ClientError
+# import uuid
+# from typing import List
+# import os
+# from dotenv import load_dotenv
+# import logging
+# import io
+
+# # Load environment variables
+# load_dotenv()
+
+# # Initialize router with prefix to prevent duplication
+# router = APIRouter(prefix="/api/v1")
+
+# logger = logging.getLogger(__name__)
+
+# BUCKET_NAME = "screenmirror-canvas-storage"
+
+# # Initialize S3 client as a dependency
+# def get_s3_client():
+#     return boto3.client(
+#         's3',
+#         region_name='ap-south-1',
+#         aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+#         aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+#     )
+
+# @router.post("/upload-photo")
+# async def upload_photo(
+#     event_id: str = Form(...),
+#     file: UploadFile = File(...),
+#     s3_client = Depends(get_s3_client)
+# ):
+#     """
+#     Upload a single photo directly to S3 bucket
+#     """
+#     logger.info(f"Processing upload for event_id: {event_id}, filename: {file.filename}")
+
+#     if not file.filename:
+#         raise HTTPException(status_code=400, detail="Empty filename")
+
+#     try:
+#         # Generate a unique ID for the file
+#         file_id = str(uuid.uuid4())
+
+#         # Create a unique key for the file
+#         file_key = f"{event_id}/{file_id}/{file.filename}"
+#         logger.info(f"Generated S3 key: {file_key}")
+
+#         # Create a BytesIO object from the file content
+#         file_object = io.BytesIO(await file.read())
+
+#         # Upload to S3 using the file object
+#         logger.info(f"Uploading file to S3: {file_key}")
+#         s3_client.upload_fileobj(
+#             file_object,
+#             BUCKET_NAME,
+#             file_key,
+#             ExtraArgs={
+#                 "ContentType": file.content_type
+#             }
+#         )
+#         logger.info(f"Successfully uploaded file to S3: {file_key}")
+
+#         # Generate a URL to access the file (if public)
+#         file_url = f"https://{BUCKET_NAME}.s3.ap-south-1.amazonaws.com/{file_key}"
+
+#         return {
+#             "success": True,
+#             "file_id": file_id,
+#             "file_key": file_key,
+#             "file_url": file_url
+#         }
+
+#     except ClientError as e:
+#         error_message = str(e)
+#         logger.error(f"S3 ClientError while uploading file: {error_message}")
+#         raise HTTPException(status_code=500, detail=f"Error uploading file: {error_message}")
+#     except Exception as e:
+#         logger.error(f"Unexpected error in upload_photo: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Failed to upload photo: {str(e)}")
+#     finally:
+#         await file.close()
+
+# @router.post("/upload-multiple-photos")
+# async def upload_multiple_photos(
+#     event_id: str = Form(...),
+#     files: List[UploadFile] = File(...),
+#     s3_client = Depends(get_s3_client)
+# ):
+#     """
+#     Upload multiple photos directly to S3 bucket
+#     """
+#     logger.info(f"Processing multiple uploads for event_id: {event_id}, file count: {len(files)}")
+
+#     if not files:
+#         raise HTTPException(status_code=400, detail="No files uploaded")
+
+#     results = []
+#     errors = []
+
+#     # Generate a unique session ID for this batch
+#     session_id = str(uuid.uuid4())
+#     logger.info(f"Generated session_id for batch upload: {session_id}")
+
+#     for file in files:
+#         try:
+#             if not file.filename:
+#                 errors.append({"error": "Empty filename"})
+#                 continue
+
+#             # Create a unique key for the file
+#             file_key = f"{event_id}/{session_id}/{file.filename}"
+
+#             # Create a BytesIO object from the file content
+#             file_object = io.BytesIO(await file.read())
+
+#             # Upload to S3 using the file object
+#             logger.info(f"Uploading file to S3: {file_key}")
+#             s3_client.upload_fileobj(
+#                 file_object,
+#                 BUCKET_NAME,
+#                 file_key,
+#                 ExtraArgs={
+#                     "ContentType": file.content_type
+#                 }
+#             )
+#             logger.info(f"Successfully uploaded file to S3: {file_key}")
+
+#             # Generate a URL to access the file (if public)
+#             file_url = f"https://{BUCKET_NAME}.s3.ap-south-1.amazonaws.com/{file_key}"
+
+#             results.append({
+#                 "filename": file.filename,
+#                 "file_key": file_key,
+#                 "file_url": file_url
+#             })
+#         except Exception as e:
+#             logger.error(f"Error uploading file {file.filename}: {str(e)}")
+#             errors.append({
+#                 "filename": file.filename,
+#                 "error": str(e)
+#             })
+#         finally:
+#             await file.close()
+
+#     return {
+#         "success": len(results) > 0,
+#         "session_id": session_id,
+#         "uploaded_files": results,
+#         "errors": errors if errors else None
+#     }
