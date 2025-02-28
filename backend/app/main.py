@@ -7,6 +7,7 @@ from app.core.init_aws import create_s3_bucket
 import uvicorn
 import logging
 import json
+from fastapi.concurrency import iterate_in_threadpool
 
 # Set up logging
 logging.basicConfig(
@@ -44,17 +45,48 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Request path: {request.url.path}")
     logger.info(f"Request method: {request.method}")
     logger.info(f"Request headers: {request.headers}")
+    logger.info(f"Query params: {request.query_params}")
 
+    # Log request body
     try:
         body = await request.body()
         if body:
-            logger.info(f"Request body: {body.decode()}")
+            try:
+                # Try to parse as JSON for better formatting
+                json_body = json.loads(body)
+                logger.info(f"Request body (JSON): {json_body}")
+            except json.JSONDecodeError:
+                # If not JSON, log as string
+                logger.info(f"Request body (raw): {body.decode()}")
     except Exception as e:
         logger.error(f"Error reading request body: {e}")
 
+    # Store body for endpoints to access
+    request._body = body
+
     response = await call_next(request)
 
+    # Log response details
     logger.info(f"Response status: {response.status_code}")
+
+    # Log response headers
+    logger.info(f"Response headers: {response.headers}")
+
+    # Try to log response body for error responses
+    if response.status_code >= 400:
+        try:
+            response_body = [section async for section in response.body_iterator]
+            response.body_iterator = iterate_in_threadpool(iter(response_body))
+
+            body = b''.join(response_body).decode()
+            try:
+                json_body = json.loads(body)
+                logger.error(f"Error response body: {json_body}")
+            except json.JSONDecodeError:
+                logger.error(f"Error response body: {body}")
+        except Exception as e:
+            logger.error(f"Error reading response body: {e}")
+
     return response
 
 # Include routers

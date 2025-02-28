@@ -63,6 +63,7 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
   String? _sessionLink;
   String? _sessionPassword;
   String? _errorMessage;
+  bool _isLocalUploading = false;
 
   Future<void> _pickImages() async {
     try {
@@ -264,6 +265,144 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
     }
   }
 
+  Future<void> _uploadPhotosLocally() async {
+    if (_eventIdController.text.isEmpty) {
+      setState(() {
+        _errorMessage = 'Please enter an event ID';
+      });
+      return;
+    }
+
+    if (_selectedPhotos.isEmpty) {
+      setState(() {
+        _errorMessage = 'Please select photos to upload';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLocalUploading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      log('Starting local upload process for ${_selectedPhotos.length} photos');
+      log('Selected photos paths: ${_selectedPhotos.map((p) => p.path).join(", ")}');
+
+      // 1. Get presigned URLs from local server
+      const localUrl = 'http://localhost:8000/api/v1/upload';
+      final url = Uri.parse(localUrl);
+      log('Making request to local server: $url');
+      log('Request headers: ${jsonEncode({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          })}');
+      log('Request body: ${jsonEncode({
+            'event_id': _eventIdController.text,
+            'num_photos': _selectedPhotos.length,
+          })}');
+
+      final stopwatch = Stopwatch()..start();
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'event_id': _eventIdController.text,
+          'num_photos': _selectedPhotos.length,
+        }),
+      );
+      stopwatch.stop();
+      log('Request took ${stopwatch.elapsedMilliseconds}ms to complete');
+
+      log('Local presigned URLs response status: ${response.statusCode}');
+      log('Local presigned URLs response headers: ${response.headers}');
+      log('Local presigned URLs response body: ${response.body}');
+
+      if (response.statusCode != 200) {
+        throw Exception(
+            'Failed to get upload URLs from local server: ${response.statusCode} - ${response.body}');
+      }
+
+      final presignedData = jsonDecode(response.body);
+      final List<String> presignedUrls =
+          List<String>.from(presignedData['presigned_urls']);
+      final String uploadSessionId = presignedData['session_id'];
+
+      log('Received ${presignedUrls.length} presigned URLs from local server');
+      log('Local upload session ID: $uploadSessionId');
+
+      // 2. Upload photos using presigned URLs
+      final List<String> uploadedUrls = [];
+
+      for (var i = 0; i < _selectedPhotos.length; i++) {
+        if (i >= presignedUrls.length) break;
+
+        final photo = _selectedPhotos[i];
+        log('Uploading photo ${i + 1}/${_selectedPhotos.length} to local: ${photo.path}');
+
+        final success = await _uploadToS3(presignedUrls[i], photo);
+        if (success) {
+          final uploadedUrl = presignedUrls[i].split('?')[0];
+          uploadedUrls.add(uploadedUrl);
+          log('Successfully uploaded to local: $uploadedUrl');
+        } else {
+          log('Failed to upload photo ${i + 1} to local server');
+        }
+      }
+
+      if (uploadedUrls.isEmpty) {
+        throw Exception('Failed to upload any photos to local server');
+      }
+
+      log('Successfully uploaded ${uploadedUrls.length} photos to local server');
+
+      // 3. Create session with uploaded photos
+      log('Creating local session for uploaded photos');
+      final sessionUrl =
+          Uri.parse('http://localhost:8000/api/v1/session/create');
+      final sessionResponse = await http.post(
+        sessionUrl,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'event_id': _eventIdController.text,
+          'photo_urls': uploadedUrls,
+        }),
+      );
+
+      log('Local session creation response: ${sessionResponse.statusCode}');
+      log('Local session creation body: ${sessionResponse.body}');
+
+      if (sessionResponse.statusCode != 200) {
+        throw Exception(
+            'Failed to create local session: ${sessionResponse.statusCode} - ${sessionResponse.body}');
+      }
+
+      final sessionData = jsonDecode(sessionResponse.body);
+      setState(() {
+        _sessionLink = sessionData['access_link'];
+        _sessionPassword = sessionData['password'];
+        _isLocalUploading = false;
+        _errorMessage = null;
+      });
+
+      log('Local upload process completed successfully');
+      log('Local session link: http://localhost:53701/session/$_sessionLink');
+    } catch (e, stackTrace) {
+      log('Error during local upload process: $e');
+      log('Stack trace: $stackTrace');
+      setState(() {
+        _errorMessage = 'Local upload failed: ${e.toString()}';
+        _isLocalUploading = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -301,11 +440,33 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
                   style: const TextStyle(color: Colors.red),
                 ),
               ),
-            ElevatedButton(
-              onPressed: _isUploading ? null : _uploadPhotos,
-              child: _isUploading
-                  ? const CircularProgressIndicator()
-                  : const Text('Upload Photos'),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isUploading ? null : _uploadPhotos,
+                    child: _isUploading
+                        ? const CircularProgressIndicator()
+                        : const Text('Upload to Production'),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isLocalUploading ? null : _uploadPhotosLocally,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: _isLocalUploading
+                        ? const CircularProgressIndicator(
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          )
+                        : const Text('Upload to Local'),
+                  ),
+                ),
+              ],
             ),
             if (_sessionLink != null && _sessionPassword != null) ...[
               const SizedBox(height: 24),
