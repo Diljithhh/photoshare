@@ -34,25 +34,11 @@ def create_s3_bucket():
                 # Configure CORS for the bucket with broader permissions for web uploads
                 cors_configuration = {
                     'CORSRules': [{
-                        'AllowedHeaders': [
-                            '*',
-                            'Content-Type',
-                            'Content-Length',
-                            'Access-Control-Allow-Origin',
-                            'Access-Control-Allow-Methods',
-                            'Access-Control-Allow-Headers'
-                        ],
-                        'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD', 'OPTIONS'],
+                        'AllowedHeaders': ['*'],
+                        'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
                         'AllowedOrigins': ['*'],
-                        'ExposeHeaders': [
-                            'ETag',
-                            'x-amz-server-side-encryption',
-                            'x-amz-request-id',
-                            'x-amz-id-2',
-                            'Content-Type',
-                            'Content-Length'
-                        ],
-                        'MaxAgeSeconds': 3600
+                        'ExposeHeaders': ['ETag'],
+                        'MaxAgeSeconds': 3000
                     }]
                 }
 
@@ -73,25 +59,11 @@ def create_s3_bucket():
     try:
         cors_configuration = {
             'CORSRules': [{
-                'AllowedHeaders': [
-                    '*',
-                    'Content-Type',
-                    'Content-Length',
-                    'Access-Control-Allow-Origin',
-                    'Access-Control-Allow-Methods',
-                    'Access-Control-Allow-Headers'
-                ],
-                'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD', 'OPTIONS'],
+                'AllowedHeaders': ['*'],
+                'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
                 'AllowedOrigins': ['*'],
-                'ExposeHeaders': [
-                    'ETag',
-                    'x-amz-server-side-encryption',
-                    'x-amz-request-id',
-                    'x-amz-id-2',
-                    'Content-Type',
-                    'Content-Length'
-                ],
-                'MaxAgeSeconds': 3600
+                'ExposeHeaders': ['ETag'],
+                'MaxAgeSeconds': 3000
             }]
         }
         s3_client.put_bucket_cors(
