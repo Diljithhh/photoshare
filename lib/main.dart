@@ -5,11 +5,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:convert';
 
-import 'package:path/path.dart' as path;
-import 'package:http_parser/http_parser.dart';
+
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:html' as html;
 import 'dart:async';
+import 'screens/session_view.dart';
 
 // Add logging function
 void log(String message) {
@@ -34,7 +35,18 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const PhotoUploadPage(),
+      initialRoute: '/',
+      onGenerateRoute: (settings) {
+        if (settings.name?.startsWith('/session/') ?? false) {
+          final sessionId = settings.name!.substring('/session/'.length);
+          return MaterialPageRoute(
+            builder: (context) => SessionView(sessionId: sessionId),
+          );
+        }
+        return MaterialPageRoute(
+          builder: (context) => const PhotoUploadPage(),
+        );
+      },
     );
   }
 }
@@ -79,51 +91,31 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       log('File size: ${bytes.length} bytes');
 
       if (kIsWeb) {
-        // Use XMLHttpRequest for web uploads to better handle CORS
+        // Use fetch API for web uploads
+        final blob = html.Blob([bytes], 'image/jpeg');
         final completer = Completer<bool>();
-        final xhr = html.HttpRequest();
 
-        xhr.open('PUT', presignedUrl);
-        xhr.setRequestHeader('Content-Type', 'image/jpeg');
-        xhr.setRequestHeader('Content-Length', bytes.length.toString());
-        xhr.setRequestHeader('Access-Control-Allow-Origin', '*');
-        xhr.setRequestHeader('Access-Control-Allow-Methods', 'PUT');
-        xhr.setRequestHeader('Access-Control-Allow-Headers', 'Content-Type');
-        xhr.withCredentials = false;
+        final uploadRequest = html.HttpRequest();
+        uploadRequest.open('PUT', presignedUrl);
+        uploadRequest.setRequestHeader('Content-Type', 'image/jpeg');
 
-        xhr.onLoad.listen((event) {
-          log('Upload response status: ${xhr.status}');
-          log('Upload response text: ${xhr.responseText}');
-          final status = xhr.status ?? 0;
-          completer.complete(status >= 200 && status < 300);
-        });
-
-        xhr.onError.listen((event) {
-          log('XHR Error: ${xhr.statusText}');
-          log('XHR Response: ${xhr.responseText}');
-          log('XHR Ready State: ${xhr.readyState}');
-          completer.complete(false);
-        });
-
-        xhr.upload.onProgress.listen((event) {
-          if (event.lengthComputable) {
-            final total = event.total ?? 0;
-            final loaded = event.loaded ?? 0;
-            if (total > 0) {
-              final percentComplete = ((loaded / total) * 100).round();
-              log('Upload progress: $percentComplete%');
-            }
+        uploadRequest.onLoad.listen((event) {
+          log('Upload response status: ${uploadRequest.status}');
+          log('Upload response text: ${uploadRequest.responseText}');
+          final status = uploadRequest.status ?? 0;
+          if (status >= 200 && status < 300) {
+            completer.complete(true);
+          } else {
+            completer.complete(false);
           }
         });
 
-        try {
-          xhr.send(bytes);
-          log('XHR request sent successfully');
-        } catch (e) {
-          log('XHR send error: $e');
+        uploadRequest.onError.listen((event) {
+          log('Upload error: ${uploadRequest.responseText}');
           completer.complete(false);
-        }
+        });
 
+        uploadRequest.send(blob);
         return await completer.future;
       } else {
         // Use dio package for mobile
@@ -134,7 +126,6 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
           options: Options(
             headers: {
               'Content-Type': 'image/jpeg',
-              'Content-Length': bytes.length.toString(),
             },
             followRedirects: true,
             validateStatus: (status) => status! < 400,
@@ -321,8 +312,30 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              SelectableText('Session Link: $_sessionLink'),
-              SelectableText('Password: $_sessionPassword'),
+              SelectableText(
+                'Session Link: ${dotenv.env['FRONTEND_URL']}/session/$_sessionLink',
+                style: const TextStyle(fontSize: 16),
+              ),
+              SelectableText(
+                'Password: $_sessionPassword',
+                style: const TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  final link =
+                      '${dotenv.env['FRONTEND_URL']}/session/$_sessionLink';
+                  // Copy to clipboard
+                  if (kIsWeb) {
+                    html.window.navigator.clipboard?.writeText(link);
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Link copied to clipboard')),
+                  );
+                },
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy Link'),
+              ),
             ],
           ],
         ),

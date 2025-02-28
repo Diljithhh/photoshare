@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import boto3
 from botocore.exceptions import ClientError
 from datetime import datetime, timedelta
-import bcrypt
+from app.core.security import get_password_hash
 import secrets
 import string
 from app.core.config import settings
@@ -76,18 +76,6 @@ def generate_password() -> str:
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(6))
 
-def hash_password(password: str) -> str:
-    """Hash a password using bcrypt."""
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(password.encode(), salt).decode()
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return bcrypt.checkpw(
-        plain_password.encode(),
-        hashed_password.encode()
-    )
-
 def store_session(session_id: str, event_id: str, hashed_password: str, photo_urls: List[str]) -> bool:
     """Store session data in DynamoDB."""
     try:
@@ -97,13 +85,14 @@ def store_session(session_id: str, event_id: str, hashed_password: str, photo_ur
                 'event_id': event_id,
                 'password_hash': hashed_password,
                 'photo_urls': photo_urls,
+                'selected_urls': [],  # Initialize empty selected photos list
                 'created_at': datetime.utcnow().isoformat(),
                 'expires_at': (datetime.utcnow() + timedelta(days=30)).isoformat()  # 30-day expiration
             }
         )
         return True
     except Exception as e:
-        print(f"Error storing session: {str(e)}")
+        logger.error(f"Error storing session: {str(e)}")
         return False
 
 def get_session(session_id: str) -> dict:
@@ -114,7 +103,34 @@ def get_session(session_id: str) -> dict:
                 'session_id': session_id
             }
         )
-        return response.get('Item')
+        session = response.get('Item')
+
+        # Check if session has expired
+        if session:
+            expires_at = datetime.fromisoformat(session['expires_at'])
+            if expires_at < datetime.utcnow():
+                logger.info(f"Session {session_id} has expired")
+                return None
+
+        return session
     except Exception as e:
-        print(f"Error retrieving session: {str(e)}")
+        logger.error(f"Error retrieving session: {str(e)}")
         return None
+
+def update_session_selections(session_id: str, selected_urls: List[str]) -> bool:
+    """Update the selected photos for a session in DynamoDB."""
+    try:
+        response = table.update_item(
+            Key={
+                'session_id': session_id
+            },
+            UpdateExpression='SET selected_urls = :urls',
+            ExpressionAttributeValues={
+                ':urls': selected_urls
+            },
+            ReturnValues='UPDATED_NEW'
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error updating session selections: {str(e)}")
+        return False
