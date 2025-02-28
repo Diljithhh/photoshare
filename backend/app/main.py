@@ -93,7 +93,7 @@ async def log_requests(request: Request, call_next):
 app.include_router(upload_router, prefix="/api/v1", tags=["uploads"])
 app.include_router(session_router, prefix="/api/v1", tags=["sessions"])
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"message": "Welcome to PhotoShare API"}
 
