@@ -6,11 +6,21 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy only the backend code
+# Copy the entire backend app directory
 COPY backend/app ./app
 
+# Set default environment variables
+ENV PORT=8000 \
+    HOST=0.0.0.0 \
+    ENVIRONMENT=production \
+    ALLOWED_ORIGINS="*" \
+    DATABASE_URL="sqlite:///./photoshare.db"
+
+# Create directory for SQLite database
+RUN mkdir -p /app/data
+
 # Expose the port
-EXPOSE $PORT
+EXPOSE ${PORT}
 
 # Command to run the application
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
