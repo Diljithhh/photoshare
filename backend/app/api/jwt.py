@@ -4,6 +4,7 @@ from app.services.jwt import create_access_token, get_current_session, verify_pa
 from app.models.imageview import PasswordAuth, Token, PhotoList, SelectionResponse
 from app.services.dynamodb import get_dynamodb_client
 from botocore.exceptions import ClientError
+from fastapi.responses import JSONResponse
 
 from app.core.jwt import TABLE_NAME, ACCESS_TOKEN_EXPIRE_MINUTES
 
@@ -51,7 +52,11 @@ async def authenticate_session(
 
         if "Item" not in response:
             logger.warning(f"Session not found: {session_id}")
-            raise HTTPException(status_code=404, detail="Session not found")
+            # Return a 404 directly instead of throwing an exception that gets caught by the outer handler
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Session not found"}
+            )
 
         session = response["Item"]
         logger.info(f"Found session: {session_id}")
@@ -61,22 +66,25 @@ async def authenticate_session(
             logger.info(f"Stored password from DynamoDB: {session['hashed_password']}")
         else:
             logger.error(f"No hashed_password found in session data: {session}")
-            raise HTTPException(status_code=500, detail="Session data is missing password")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Session data is missing password"}
+            )
 
         # Verify the password
         try:
             is_valid = verify_password(auth_data.password, session["hashed_password"])
             logger.info(f"Password verification result: {is_valid}")
             if not is_valid:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Incorrect password"
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Incorrect password"}
                 )
         except Exception as verify_error:
             logger.error(f"Error during password verification: {str(verify_error)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Password verification error: {str(verify_error)}"
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"Password verification error: {str(verify_error)}"}
             )
 
         # Generate access token
@@ -93,12 +101,18 @@ async def authenticate_session(
     except ClientError as e:
         error_message = str(e)
         logger.error(f"DynamoDB error: {error_message}")
-        raise HTTPException(status_code=500, detail=f"Database error: {error_message}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Database error: {error_message}"}
+        )
     except Exception as e:
         error_traceback = traceback.format_exc()
         logger.error(f"Unexpected error: {str(e)}")
         logger.error(f"Traceback: {error_traceback}")
-        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Authentication failed: {str(e)}"}
+        )
 
 @router.get("/session/{session_id}/photos", response_model=PhotoList)
 async def get_session_photos(

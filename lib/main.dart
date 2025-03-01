@@ -13,6 +13,7 @@ import 'package:photoshare/utils/router.dart';
 import 'package:uuid/uuid.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'dart:developer' as dev;
 
 void main() async {
   // Ensure Flutter is initialized
@@ -110,18 +111,37 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
   final List<CrossPlatformImage> _selectedImages = [];
   bool _isUploading = false;
   String _statusMessage = '';
-  bool _isProduction = false;
+  bool _isProduction = true; // Default to production mode
   SessionResponse? _sessionResponse;
   bool _useDirectUpload =
       true; // Toggle between direct upload and presigned URLs
 
   // Environment URLs
-  final String _localApiUrl = 'http://localhost:8000';
+  // For actual devices, use your computer's local network IP instead of localhost
+  // You need to update this to your computer's IP address on your local network
+  final String _localApiUrl =
+      '10.0.2.2:8000'; // For Android emulator, use 10.0.2.2 which maps to host loopback
   final String _productionApiUrl =
       dotenv.env['API_URL'] ?? 'https://photoshare-dn8f.onrender.com';
 
   // Get current API URL based on environment
-  String get _apiBaseUrl => _isProduction ? _productionApiUrl : _localApiUrl;
+  String get _apiBaseUrl {
+    if (_isProduction) {
+      return _productionApiUrl;
+    } else {
+      // When running on a physical device, use your computer's IP address
+      // When running on an emulator, use 10.0.2.2 (Android) or localhost (iOS)
+      if (kIsWeb) {
+        return 'http://localhost:8000';
+      } else if (Platform.isAndroid) {
+        return 'http://$_localApiUrl'; // Make sure http:// is included for Android
+      } else if (Platform.isIOS) {
+        return 'http://localhost:8000'; // For iOS simulator
+      } else {
+        return 'http://$_localApiUrl';
+      }
+    }
+  }
 
   // Event ID controller
   final TextEditingController _eventIdController = TextEditingController();
@@ -258,6 +278,13 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
 
       // Create a multipart request
       final uri = Uri.parse('$_apiBaseUrl/api/v1/upload-multiple-photos');
+      dev.log('Upload URL: $uri'); // Fixed log method
+
+      // Add debug info to the status
+      setState(() {
+        _statusMessage = 'Connecting to: $uri';
+      });
+
       final request = http.MultipartRequest('POST', uri);
 
       // Add event_id as a form field
@@ -295,31 +322,56 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
 
       // Send the request
       setState(() {
-        _statusMessage = 'Sending files to server...';
+        _statusMessage = 'Sending ${_selectedImages.length} files to server...';
       });
 
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      try {
+        final streamedResponse = await request.send().timeout(
+          const Duration(seconds: 30),
+          onTimeout: () {
+            throw Exception(
+                'Connection timed out. Check your network and backend server.');
+          },
+        );
 
-      if (response.statusCode == 200) {
-        final responseData = jsonDecode(response.body);
-        setState(() {
-          _statusMessage =
-              'Upload successful! Uploaded ${responseData['uploaded_files'].length} files.';
-        });
-        print('Direct upload response: ${response.body}');
+        final response = await http.Response.fromStream(streamedResponse);
 
-        // Extract file URLs from the response
-        final List<dynamic> uploadedFiles = responseData['uploaded_files'];
-        return uploadedFiles
-            .map<String>((item) => item['file_url'] as String)
-            .toList();
-      } else {
-        throw Exception(
-            'Failed to upload images: ${response.statusCode} - ${response.body}');
+        if (response.statusCode == 200) {
+          final responseData = jsonDecode(response.body);
+          setState(() {
+            _statusMessage =
+                'Upload successful! Uploaded ${responseData['uploaded_files'].length} files.';
+          });
+          dev.log(
+              'Direct upload response: ${response.body}'); // Fixed log method
+
+          // Extract file URLs from the response
+          final List<dynamic> uploadedFiles = responseData['uploaded_files'];
+          return uploadedFiles
+              .map<String>((item) => item['file_url'] as String)
+              .toList();
+        } else {
+          throw Exception(
+              'Failed to upload images: ${response.statusCode} - ${response.body}');
+        }
+      } catch (e) {
+        if (!_isProduction) {
+          // Provide detailed debugging for local environment
+          setState(() {
+            _statusMessage = '''
+Local upload failed: $e
+Check:
+1. Is your backend server running at $_apiBaseUrl?
+2. Is CORS configured correctly on your backend?
+3. If using physical device, is it on the same network as your computer?
+4. Try updating _localApiUrl to your computer's actual IP address
+''';
+          });
+        }
+        rethrow;
       }
     } catch (e) {
-      print('Error during direct upload: $e');
+      dev.log('Error during direct upload: $e', error: e); // Fixed log method
       setState(() {
         _statusMessage = 'Direct upload failed: $e';
       });

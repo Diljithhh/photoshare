@@ -27,6 +27,9 @@ app = FastAPI(
 
 # Get allowed origins from environment variable
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+# For local development, add any frontend origin
+if os.getenv("ENVIRONMENT") == "development":
+    allowed_origins = ["*"]  # Allow all origins in development
 print(f"CORS allowed origins: {allowed_origins}")
 
 # Add CORS middleware

@@ -33,7 +33,8 @@ def get_dynamodb_client():
 TABLE_NAME = "photo_sessions_share"
 
 # Base URL for session links
-BASE_URL = os.getenv('FRONTEND_URL', os.getenv('BASE_URL', 'https://photo-share-app-id.web.app'))
+# For local testing, default to localhost
+BASE_URL = os.getenv('FRONTEND_URL', os.getenv('BASE_URL', 'http://localhost:3000'))
 
 @router.post("/session/create", response_model=SessionResponse)
 async def create_session(

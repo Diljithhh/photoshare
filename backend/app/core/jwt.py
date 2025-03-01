@@ -25,7 +25,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # DynamoDB settings
-TABLE_NAME = "photo_sessions"
+TABLE_NAME = "photo_sessions_share"
 
 # OAuth2 scheme for JWT
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
