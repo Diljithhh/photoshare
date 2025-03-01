@@ -53,6 +53,41 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
+      initialRoute: '/',
+      onGenerateRoute: (settings) {
+        // Check if this is a direct session URL with no path segments (could be from a deep link)
+        if (settings.name != null && settings.name!.contains('/session/')) {
+          // Extract session ID from the URL
+          final url = settings.name!;
+          print('URLsaasaas: $url');
+          // Extract session ID from URL like https://photoshare-dn8f.onrender.com/session/7f5432b5-746b-457e-a8ba-39fc45e0cb71
+          final sessionIdMatch = RegExp(r'/session/([^/?&#]+)').firstMatch(url);
+          print('sessionIdMatch: $sessionIdMatch');
+          if (sessionIdMatch != null && sessionIdMatch.groupCount >= 1) {
+            final sessionId = sessionIdMatch.group(1);
+            print('sessionId: $sessionId');
+            return MaterialPageRoute(
+              builder: (context) => SessionView(sessionId: sessionId!),
+            );
+          }
+        }
+
+        // Handle '/session/:id' routes (standard path segments)
+        final uri = Uri.parse(settings.name ?? '/');
+        final pathSegments = uri.pathSegments;
+
+        if (pathSegments.length >= 2 && pathSegments[0] == 'session') {
+          final sessionId = pathSegments[1];
+          return MaterialPageRoute(
+            builder: (context) => SessionView(sessionId: sessionId),
+          );
+        }
+
+        // Default route
+        return MaterialPageRoute(
+          builder: (context) => const PhotoShareApp(),
+        );
+      },
       home: const PhotoShareApp(),
     );
   }
@@ -77,7 +112,8 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
 
   // Environment URLs
   final String _localApiUrl = 'http://localhost:8000';
-  final String _productionApiUrl = 'https://photoshare-dn8f.onrender.com';
+  final String _productionApiUrl =
+      dotenv.env['API_URL'] ?? 'https://photoshare-dn8f.onrender.com';
 
   // Get current API URL based on environment
   String get _apiBaseUrl => _isProduction ? _productionApiUrl : _localApiUrl;
@@ -576,6 +612,14 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
 
   // Add this widget to display session details
   Widget _buildSessionDetailsCard(SessionResponse session) {
+    // Convert the backend URL to frontend URL if needed
+    String displaySessionLink = session.sessionLink;
+    if (displaySessionLink.contains('photoshare-dn8f.onrender.com')) {
+      final frontendUrl =
+          dotenv.env['FRONTEND_URL'] ?? 'https://photo-share-app-id.web.app';
+      displaySessionLink = '$frontendUrl/session/${session.sessionId}';
+    }
+
     return Card(
       elevation: 4,
       margin: const EdgeInsets.all(16),
@@ -600,7 +644,7 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                       const Text('Share Link:',
                           style: TextStyle(fontWeight: FontWeight.bold)),
                       Text(
-                        session.sessionLink,
+                        displaySessionLink,
                         style: const TextStyle(color: Colors.blue),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -610,7 +654,7 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                 IconButton(
                   icon: const Icon(Icons.copy),
                   onPressed: () {
-                    Clipboard.setData(ClipboardData(text: session.sessionLink));
+                    Clipboard.setData(ClipboardData(text: displaySessionLink));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Link copied to clipboard')),
                     );
@@ -656,7 +700,7 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
             ElevatedButton.icon(
               onPressed: () {
                 final textToCopy =
-                    'View photos at: ${session.sessionLink}\nPassword: ${session.password}';
+                    'View photos at: ${displaySessionLink}\nPassword: ${session.password}';
                 Clipboard.setData(ClipboardData(text: textToCopy));
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -676,7 +720,7 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
             ElevatedButton.icon(
               onPressed: () {
                 // Extract session ID from the session link
-                final uri = Uri.parse(session.sessionLink);
+                final uri = Uri.parse(displaySessionLink);
                 final pathSegments = uri.pathSegments;
                 if (pathSegments.length >= 2 && pathSegments[0] == 'session') {
                   final sessionId = pathSegments[1];

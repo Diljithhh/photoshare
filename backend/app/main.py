@@ -1,5 +1,3 @@
-
-
 # main.py
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -8,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from app.api.sessions import router as session_router
 from app.api.jwt import router as jwt_router
+import os
+from dotenv import load_dotenv
 
 # Import the photo upload router - adjust the import path as needed
 from app.api.uploads import router as photo_router
@@ -16,16 +16,23 @@ from app.api.uploads import router as photo_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load environment variables
+load_dotenv()
+
 app = FastAPI(
     title="Photo Upload API",
     description="API for uploading photos to S3",
     version="1.0.0"
 )
 
+# Get allowed origins from environment variable
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+print(f"CORS allowed origins: {allowed_origins}")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this in production
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
