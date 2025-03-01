@@ -20,7 +20,7 @@ void main() async {
 
   // Load environment variables
   await dotenv.load(fileName: ".env");
-   usePathUrlStrategy(); //
+  usePathUrlStrategy(); //
 
   runApp(const MyApp());
 }
@@ -689,8 +689,6 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                 IconButton(
                   icon: const Icon(Icons.copy),
                   onPressed: () {
-                 context.go('/session/${session.sessionId}');
-
                     Clipboard.setData(ClipboardData(text: session.password));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -703,11 +701,9 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
 
             const SizedBox(height: 16),
 
-
             // Copy both at once button
             ElevatedButton.icon(
               onPressed: () {
-
                 final textToCopy =
                     'View photos at: ${displaySessionLink}\nPassword: ${session.password}';
                 Clipboard.setData(ClipboardData(text: textToCopy));
@@ -733,11 +729,8 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                 final pathSegments = uri.pathSegments;
                 if (pathSegments.length >= 2 && pathSegments[0] == 'session') {
                   final sessionId = pathSegments[1];
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => SessionView(sessionId: sessionId),
-                    ),
-                  );
+                  // Use go_router for navigation
+                  context.go('/session/$sessionId');
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(

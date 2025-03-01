@@ -55,11 +55,7 @@ class _SessionViewState extends State<SessionView> {
       // Make sure the endpoint format matches what the backend expects
       // final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
 // final endpoint = '$baseUrl/session/${_cleanSessionId}/auth';
-final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
-
-
-
-
+      final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
 
       print('AUTHENTICATION DEBUG:');
       print('Base URL: $baseUrl');
@@ -79,10 +75,14 @@ final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
         print('Base URL connection error: $e');
       }
 
+      // Log the password being sent for debugging
+      final password = _passwordController.text;
+      print('Frontend - Password being sent: $password');
+
       final response = await http.post(
         Uri.parse(endpoint),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'password': _passwordController.text}),
+        body: jsonEncode({'password': password}),
       );
 
       print('Auth response status: ${response.statusCode}');
@@ -107,9 +107,24 @@ final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
           });
         }
       } else {
-        setState(() {
-          _errorMessage = 'Authentication failed (${response.statusCode})';
-        });
+        // Enhanced error reporting
+        print('FULL ERROR RESPONSE:');
+        print('Status code: ${response.statusCode}');
+        print('Headers: ${response.headers}');
+        print('Body: ${response.body}');
+
+        try {
+          final errorData = jsonDecode(response.body);
+          setState(() {
+            _errorMessage =
+                'Authentication failed (${response.statusCode}): ${errorData['detail'] ?? 'Unknown error'}';
+          });
+        } catch (e) {
+          setState(() {
+            _errorMessage =
+                'Authentication failed (${response.statusCode}): ${response.body}';
+          });
+        }
       }
     } catch (e) {
       print('Authentication error: $e');
