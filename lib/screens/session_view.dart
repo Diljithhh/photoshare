@@ -54,7 +54,13 @@ class _SessionViewState extends State<SessionView> {
           dotenv.env['API_URL'] ?? 'https://photoshare-dn8f.onrender.com';
       // Make sure the endpoint format matches what the backend expects
       // final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
-final endpoint = '$baseUrl/session/${_cleanSessionId}/auth';
+// final endpoint = '$baseUrl/session/${_cleanSessionId}/auth';
+final endpoint = '$baseUrl/api/v1/session/${_cleanSessionId}/auth';
+
+
+
+
+
       print('AUTHENTICATION DEBUG:');
       print('Base URL: $baseUrl');
       print('Endpoint: $endpoint');

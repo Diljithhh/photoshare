@@ -9,7 +9,10 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:photoshare/screens/sessionModels.dart';
 import 'package:photoshare/screens/session_view.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:photoshare/utils/router.dart';
 import 'package:uuid/uuid.dart';
+import 'package:go_router/go_router.dart';
+import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
 void main() async {
   // Ensure Flutter is initialized
@@ -17,6 +20,7 @@ void main() async {
 
   // Load environment variables
   await dotenv.load(fileName: ".env");
+   usePathUrlStrategy(); //
 
   runApp(const MyApp());
 }
@@ -47,48 +51,49 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
+      routerConfig: AppRouter().router,
       title: 'PhotoShare',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      initialRoute: '/',
-      onGenerateRoute: (settings) {
-        // Check if this is a direct session URL with no path segments (could be from a deep link)
-        if (settings.name != null && settings.name!.contains('/session/')) {
-          // Extract session ID from the URL
-          final url = settings.name!;
-          print('URLsaasaas: $url');
-          // Extract session ID from URL like https://photoshare-dn8f.onrender.com/session/7f5432b5-746b-457e-a8ba-39fc45e0cb71
-          final sessionIdMatch = RegExp(r'/session/([^/?&#]+)').firstMatch(url);
-          print('sessionIdMatch: $sessionIdMatch');
-          if (sessionIdMatch != null && sessionIdMatch.groupCount >= 1) {
-            final sessionId = sessionIdMatch.group(1);
-            print('sessionId: $sessionId');
-            return MaterialPageRoute(
-              builder: (context) => SessionView(sessionId: sessionId!),
-            );
-          }
-        }
+      // initialRoute: '/',
+      // onGenerateRoute: (settings) {
+      //   // Check if this is a direct session URL with no path segments (could be from a deep link)
+      //   if (settings.name != null && settings.name!.contains('/session/')) {
+      //     // Extract session ID from the URL
+      //     final url = settings.name!;
+      //     print('URLsaasaas: $url');
+      //     // Extract session ID from URL like https://photoshare-dn8f.onrender.com/session/7f5432b5-746b-457e-a8ba-39fc45e0cb71
+      //     final sessionIdMatch = RegExp(r'/session/([^/?&#]+)').firstMatch(url);
+      //     print('sessionIdMatch: $sessionIdMatch');
+      //     if (sessionIdMatch != null && sessionIdMatch.groupCount >= 1) {
+      //       final sessionId = sessionIdMatch.group(1);
+      //       print('sessionId: $sessionId');
+      //       return MaterialPageRoute(
+      //         builder: (context) => SessionView(sessionId: sessionId!),
+      //       );
+      //     }
+      //   }
 
-        // Handle '/session/:id' routes (standard path segments)
-        final uri = Uri.parse(settings.name ?? '/');
-        final pathSegments = uri.pathSegments;
+      //   // Handle '/session/:id' routes (standard path segments)
+      //   final uri = Uri.parse(settings.name ?? '/');
+      //   final pathSegments = uri.pathSegments;
 
-        if (pathSegments.length >= 2 && pathSegments[0] == 'session') {
-          final sessionId = pathSegments[1];
-          return MaterialPageRoute(
-            builder: (context) => SessionView(sessionId: sessionId),
-          );
-        }
+      //   if (pathSegments.length >= 2 && pathSegments[0] == 'session') {
+      //     final sessionId = pathSegments[1];
+      //     return MaterialPageRoute(
+      //       builder: (context) => SessionView(sessionId: sessionId),
+      //     );
+      //   }
 
-        // Default route
-        return MaterialPageRoute(
-          builder: (context) => const PhotoShareApp(),
-        );
-      },
-      home: const PhotoShareApp(),
+      //   // Default route
+      //   return MaterialPageRoute(
+      //     builder: (context) => const PhotoShareApp(),
+      //   );
+      // },
+      // home: const PhotoShareApp(),
     );
   }
 }
@@ -684,6 +689,8 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                 IconButton(
                   icon: const Icon(Icons.copy),
                   onPressed: () {
+                 context.go('/session/${session.sessionId}');
+
                     Clipboard.setData(ClipboardData(text: session.password));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -696,9 +703,11 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
 
             const SizedBox(height: 16),
 
+
             // Copy both at once button
             ElevatedButton.icon(
               onPressed: () {
+
                 final textToCopy =
                     'View photos at: ${displaySessionLink}\nPassword: ${session.password}';
                 Clipboard.setData(ClipboardData(text: textToCopy));
