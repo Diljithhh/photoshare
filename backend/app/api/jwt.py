@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 import logging
 import bcrypt
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -32,40 +33,71 @@ async def authenticate_session(
     """
     Authenticate a user for a specific session using a password
     """
+    # Add debug logging for the incoming request
+    logger.info(f"Authentication attempt for session_id: {session_id}")
+    if auth_data:
+        logger.info(f"Request contains auth_data with password: {auth_data.password}")
+    else:
+        logger.info("Request does not contain auth_data")
+
     if not auth_data:
         raise HTTPException(status_code=400, detail="Password is required")
 
     try:
         # Get the session from DynamoDB
         table = dynamodb.Table(TABLE_NAME)
+        logger.info(f"Querying DynamoDB table {TABLE_NAME} for session_id: {session_id}")
         response = table.get_item(Key={"session_id": session_id})
 
         if "Item" not in response:
+            logger.warning(f"Session not found: {session_id}")
             raise HTTPException(status_code=404, detail="Session not found")
 
         session = response["Item"]
+        logger.info(f"Found session: {session_id}")
+
+        # Log the stored hashed_password value
+        if "hashed_password" in session:
+            logger.info(f"Stored password from DynamoDB: {session['hashed_password']}")
+        else:
+            logger.error(f"No hashed_password found in session data: {session}")
+            raise HTTPException(status_code=500, detail="Session data is missing password")
 
         # Verify the password
-        if not verify_password(auth_data.password, session["hashed_password"]):
+        try:
+            is_valid = verify_password(auth_data.password, session["hashed_password"])
+            logger.info(f"Password verification result: {is_valid}")
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Incorrect password"
+                )
+        except Exception as verify_error:
+            logger.error(f"Error during password verification: {str(verify_error)}")
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect password"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Password verification error: {str(verify_error)}"
             )
 
         # Generate access token
+        logger.info("Generating JWT access token")
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": session_id},
             expires_delta=access_token_expires
         )
 
+        logger.info("Authentication successful, returning token")
         return {"access_token": access_token, "token_type": "bearer"}
 
     except ClientError as e:
-        logger.error(f"DynamoDB error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error")
+        error_message = str(e)
+        logger.error(f"DynamoDB error: {error_message}")
+        raise HTTPException(status_code=500, detail=f"Database error: {error_message}")
     except Exception as e:
+        error_traceback = traceback.format_exc()
         logger.error(f"Unexpected error: {str(e)}")
+        logger.error(f"Traceback: {error_traceback}")
         raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 @router.get("/session/{session_id}/photos", response_model=PhotoList)

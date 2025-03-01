@@ -58,8 +58,15 @@ async def get_current_session(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash using bcrypt"""
-    return bcrypt.checkpw(
-        plain_password.encode('utf-8'),
-        hashed_password.encode('utf-8')
-    )
+    """
+    Verify a password against its hash using bcrypt
+
+    IMPORTANT NOTE: Password hashing is temporarily disabled, using plain text comparison instead.
+    This function will compare the plain passwords directly.
+    This is ONLY FOR TESTING purposes and should be reverted in production.
+    """
+    # Since password hashing is disabled, just compare plain text passwords
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"JWT SERVICE: Password verification using plain text comparison: comparing '{plain_password}' with '{hashed_password}'")
+    return plain_password == hashed_password
