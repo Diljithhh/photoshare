@@ -52,6 +52,11 @@ def hash_password(password):
 
 def verify_password(plain_password, hashed_password):
     """Verify a password against its hash"""
-    plain_password_bytes = plain_password.encode('utf-8')
-    hashed_password_bytes = hashed_password.encode('utf-8')
-    return bcrypt.checkpw(plain_password_bytes, hashed_password_bytes)
+    # COMMENTED OUT BCRYPT VERIFICATION
+    # plain_password_bytes = plain_password.encode('utf-8')
+    # hashed_password_bytes = hashed_password.encode('utf-8')
+    # return bcrypt.checkpw(plain_password_bytes, hashed_password_bytes)
+
+    # Since password hashing is disabled, just compare plain text passwords
+    logger.info(f"IMPORTANT: Password verification using plain text comparison: comparing '{plain_password}' with '{hashed_password}'")
+    return plain_password == hashed_password
