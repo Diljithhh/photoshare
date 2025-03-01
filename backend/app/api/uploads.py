@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, Header, Request
 import boto3
 from botocore.exceptions import ClientError
 import uuid
@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 import logging
 import io
 from pydantic import BaseModel
+from fastapi.responses import Response, JSONResponse
+from urllib.parse import urlparse, parse_qs
 
 # Load environment variables
 load_dotenv()
@@ -413,7 +415,6 @@ async def proxy_image(
 
             # Return the file content with appropriate headers
             # This bypasses CORS and authentication issues
-            from fastapi.responses import Response
             return Response(
                 content=file_content,
                 media_type=content_type
@@ -430,3 +431,209 @@ async def proxy_image(
     except Exception as e:
         logger.error(f"Error proxying image: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to proxy image: {str(e)}")
+
+@router.post("/refresh-image-url")
+async def refresh_image_url(
+    request: dict,
+    s3_client = Depends(get_s3_client),
+    authorization: str = Header(None)
+):
+    """
+    Refresh an expired presigned URL for an S3 image
+
+    This endpoint is intended to be used when a presigned URL has expired in production
+    and needs to be refreshed. It takes a path and generates a new presigned URL.
+    """
+    logger.info(f"Request to refresh image URL: {request}")
+
+    # Verify authorization token (basic check)
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.error("Missing or invalid authorization header")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Check if the request contains a path
+    if "path" not in request:
+        logger.error("Missing path parameter")
+        raise HTTPException(status_code=400, detail="Missing path parameter")
+
+    path = request["path"]
+    logger.info(f"Refreshing URL for path: {path}")
+
+    try:
+        # Extract the key from the path
+        # The path is typically in the format /bucket-name/key or just /key
+        if path.startswith('/'):
+            parts = path.strip('/').split('/', 1)
+            if len(parts) == 2 and parts[0] == BUCKET_NAME:
+                # Format: /bucket-name/key
+                object_key = parts[1]
+            else:
+                # Format: /key (bucket is not specified, use default)
+                object_key = path.lstrip('/')
+        else:
+            # Directly use as key
+            object_key = path
+
+        logger.info(f"Extracted S3 object key: {object_key}")
+
+        # Verify that the object exists
+        try:
+            s3_client.head_object(Bucket=BUCKET_NAME, Key=object_key)
+        except ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                logger.error(f"Object does not exist: {BUCKET_NAME}/{object_key}")
+                raise HTTPException(status_code=404, detail="Image not found")
+            else:
+                logger.error(f"Error checking object existence: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"S3 error: {str(e)}")
+
+        # Generate a new presigned URL with longer expiration
+        EXPIRATION = 7200  # 2 hours (adjust as needed)
+
+        # Determine content type based on file extension
+        content_type = "image/jpeg"  # Default
+        if object_key.lower().endswith('.png'):
+            content_type = "image/png"
+        elif object_key.lower().endswith('.gif'):
+            content_type = "image/gif"
+        elif object_key.lower().endswith('.webp'):
+            content_type = "image/webp"
+
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': BUCKET_NAME,
+                'Key': object_key,
+                'ResponseContentType': content_type
+            },
+            ExpiresIn=EXPIRATION
+        )
+
+        logger.info(f"Generated new presigned URL for {object_key} with {EXPIRATION}s expiration")
+
+        return {
+            "success": True,
+            "presigned_url": presigned_url,
+            "expires_in": EXPIRATION
+        }
+    except ClientError as e:
+        error_response = e.response.get('Error', {})
+        error_code = error_response.get('Code', 'Unknown')
+        error_message = error_response.get('Message', str(e))
+        logger.error(f"S3 ClientError while refreshing URL: Code={error_code}, Message={error_message}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error refreshing URL: {error_code} - {error_message}"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in refresh_image_url: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to refresh image URL: {str(e)}"
+        )
+
+@router.get("/direct-access")
+async def direct_access(url: str, request: Request):
+    """
+    Endpoint to proxy image requests directly, bypassing CORS restrictions.
+    Works in both development and production environments.
+
+    Takes a URL parameter pointing to the image to proxy.
+    Returns the image data with appropriate content type.
+    """
+    config = request.app.state.config
+    logger.info(f"Direct access request for URL: {url}")
+
+    try:
+        # Security check - only allow S3 URLs
+        parsed_url = urlparse(url)
+        is_s3_url = ".s3." in parsed_url.netloc or "s3.amazonaws.com" in parsed_url.netloc
+
+        if not is_s3_url:
+            logger.warning(f"Attempted to proxy non-S3 URL: {url}")
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Only S3 URLs can be proxied for security reasons"}
+            )
+
+        # Fetch the actual image data
+        client = request.app.state.s3_client
+
+        # Extract bucket and key from URL
+        if parsed_url.netloc.startswith('s3.amazonaws.com'):
+            # Format: s3.amazonaws.com/bucket-name/key-path
+            path_parts = parsed_url.path.strip('/').split('/', 1)
+            if len(path_parts) < 2:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid S3 URL format"}
+                )
+            bucket_name = path_parts[0]
+            object_key = path_parts[1]
+        elif '.s3.' in parsed_url.netloc:
+            # Format: bucket-name.s3.region.amazonaws.com/key-path
+            bucket_name = parsed_url.netloc.split('.s3.')[0]
+            object_key = parsed_url.path.strip('/')
+        else:
+            # For presigned URLs, parse the query parameters to find the bucket and key
+            query_params = parse_qs(parsed_url.query)
+            if 'X-Amz-Credential' in query_params:
+                # Extract from X-Amz-Credential parameter
+                credential = query_params['X-Amz-Credential'][0]
+                # Example format: AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request
+                bucket_name = config.AWS_BUCKET_NAME  # Default to configured bucket
+                object_key = parsed_url.path.strip('/')
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "Could not determine S3 bucket and key"}
+                )
+
+        logger.info(f"Accessing S3 object: bucket={bucket_name}, key={object_key}")
+
+        try:
+            # Get the S3 object
+            response = client.get_object(
+                Bucket=bucket_name,
+                Key=object_key
+            )
+
+            # Get the content type
+            content_type = response['ContentType']
+
+            # Stream the data
+            data = response['Body'].read()
+
+            # Return with appropriate content type
+            return Response(
+                content=data,
+                media_type=content_type
+            )
+
+        except botocore.exceptions.ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                logger.error(f"S3 object not found: {bucket_name}/{object_key}")
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "Image not found in S3"}
+                )
+            elif error_code == 'AccessDenied':
+                logger.error(f"Access denied to S3 object: {bucket_name}/{object_key}")
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Access denied to the requested image"}
+                )
+            else:
+                logger.error(f"S3 error: {error_code} - {str(e)}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": f"S3 error: {error_code}"}
+                )
+
+    except Exception as e:
+        logger.error(f"Error proxying image: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Failed to proxy image: {str(e)}"}
+        )

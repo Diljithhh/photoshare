@@ -54,26 +54,108 @@ class _SessionViewState extends State<SessionView> {
 
   // Use this to transform an S3 URL to a proxied URL that goes through the backend
   String _transformImageUrl(String originalUrl) {
-    // If we're not in development or not using the proxy, return the original URL
-    if (_isProduction || !_useImageProxy) {
+    // Check if the URL is null or empty
+    if (originalUrl.isEmpty) {
+      dev.log('Empty URL provided to _transformImageUrl');
       return originalUrl;
     }
 
-    // Extract the S3 key from the URL
-    // The URL looks like: https://screenmirror-canvas-storage.s3.ap-south-1.amazonaws.com/{eventId}/{sessionId}/{filename}
-    final Uri uri = Uri.parse(originalUrl);
-    final path = uri.path;
+    // Log URL for debugging
+    dev.log(
+        'Processing URL: ${originalUrl.substring(0, min(50, originalUrl.length))}...');
 
-    if (path.startsWith('/')) {
-      // S3 path format: /bucketname/key
-      // We need to encode the key for use in a query parameter
-      final encodedKey = Uri.encodeComponent(path);
-      // Return a URL that proxies through our backend
-      return '$_apiBaseUrl/api/v1/proxy-image?url=$encodedKey';
-    } else {
-      // If we can't parse it, return the original
-      return originalUrl;
+    try {
+      final Uri uri = Uri.parse(originalUrl);
+      final bool isS3Url =
+          uri.host.contains('.s3.') || uri.host.contains('s3.amazonaws.com');
+
+      // If we're in development and using the proxy
+      if (!_isProduction && _useImageProxy) {
+        // Handle both s3.amazonaws.com and s3.ap-south-1.amazonaws.com formats
+        if (isS3Url) {
+          final path = uri.path;
+
+          // We need to encode the key for use in a query parameter
+          final encodedKey = Uri.encodeComponent(path);
+          // Return a URL that proxies through our backend
+          return '$_apiBaseUrl/api/v1/proxy-image?url=$encodedKey';
+        }
+      }
+
+      // For production S3 URLs: Use direct-access endpoint to avoid CORS issues
+      if (_isProduction && isS3Url) {
+        // Check if this is a presigned URL
+        final bool isPresignedUrl =
+            uri.queryParameters.containsKey('X-Amz-Signature');
+
+        if (isPresignedUrl) {
+          // To avoid CORS issues with presigned URLs, use our backend as a proxy
+          // This ensures the image will display properly in all browsers
+          final encodedUrl = Uri.encodeComponent(originalUrl);
+          return '$_apiBaseUrl/api/v1/direct-access?url=$encodedUrl';
+        } else {
+          // Direct S3 URL without presigning - log a warning
+          dev.log(
+              'WARNING: Direct S3 URL without presigning in production - likely to cause 403 errors: $originalUrl');
+
+          // Try to proxy it anyway
+          final encodedUrl = Uri.encodeComponent(originalUrl);
+          return '$_apiBaseUrl/api/v1/direct-access?url=$encodedUrl';
+        }
+      }
+    } catch (e) {
+      dev.log(
+          'Error processing URL in _transformImageUrl: $e, URL: $originalUrl');
     }
+
+    // Return the original URL if no transformation is needed or if there was an error
+    return originalUrl;
+  }
+
+  // Helper to retry loading an image with refreshed presigned URL if needed
+  Future<String?> _refreshPresignedUrl(String originalUrl) async {
+    if (!_isProduction || _accessToken == null) return null;
+
+    try {
+      // Extract key from the URL
+      final Uri uri = Uri.parse(originalUrl);
+      final path = uri.path;
+      // Extract the path components from something like /bucket-name/event-id/session-id/file.jpg
+      final pathParts =
+          path.split('/').where((part) => part.isNotEmpty).toList();
+
+      if (pathParts.length >= 3) {
+        final endpoint = '$_apiBaseUrl/api/v1/refresh-image-url';
+        final response = await http
+            .post(
+          Uri.parse(endpoint),
+          headers: {
+            'Authorization': 'Bearer $_accessToken',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'path': path,
+          }),
+        )
+            .timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw Exception('Timeout refreshing image URL');
+          },
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['presigned_url'] != null) {
+            return data['presigned_url'] as String;
+          }
+        }
+      }
+    } catch (e) {
+      dev.log('Error refreshing presigned URL: $e');
+    }
+
+    return null;
   }
 
   // Extract clean session ID in case the full URL was passed
@@ -501,6 +583,25 @@ For local testing, check:
               ],
             ),
           ),
+        // Production environment banner for S3 access issues
+        if (_isProduction && _photos.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.all(8),
+            color: Colors.amber[100],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'S3 Photo Access: Production Mode',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'If images fail with 403 errors, they may have expired. Contact support.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
         Expanded(
           child: _photos.isEmpty
               ? const Center(child: Text('No photos available'))
@@ -526,49 +627,7 @@ For local testing, check:
                       },
                       child: Stack(
                         children: [
-                          Image.network(
-                            displayUrl,
-                            fit: BoxFit.cover,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return Center(
-                                child: CircularProgressIndicator(
-                                  value: loadingProgress.expectedTotalBytes !=
-                                          null
-                                      ? loadingProgress.cumulativeBytesLoaded /
-                                          loadingProgress.expectedTotalBytes!
-                                      : null,
-                                ),
-                              );
-                            },
-                            errorBuilder: (context, error, stackTrace) {
-                              dev.log(
-                                  'Error loading image $displayUrl: $error');
-                              return Container(
-                                color: Colors.grey[300],
-                                child: Center(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.error, color: Colors.red),
-                                      Text(
-                                        'S3 Access Error',
-                                        style: TextStyle(
-                                          color: Colors.red[900],
-                                          fontSize: 10,
-                                        ),
-                                      ),
-                                      if (!_isProduction && !_useImageProxy)
-                                        Text(
-                                          '403 Forbidden',
-                                          style: TextStyle(fontSize: 8),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
+                          _buildImageWithRetry(displayUrl, originalUrl),
                           if (isSelected)
                             Positioned.fill(
                               child: Container(
@@ -605,6 +664,333 @@ For local testing, check:
     );
   }
 
+  // Build image with retry mechanism
+  Widget _buildImageWithRetry(String displayUrl, String originalUrl) {
+    return StatefulBuilder(
+      builder: (context, setImageState) {
+        // Track loading and error states within this image
+        bool isRetrying = false;
+        bool hasError = false;
+        String? errorMessage;
+
+        // Detect if this is a presigned URL
+        bool isPresignedUrl = originalUrl.contains('X-Amz-Signature');
+        bool isS3Url = originalUrl.contains('s3.amazonaws.com');
+        bool isProxiedUrl = displayUrl.contains('/direct-access') ||
+            displayUrl.contains('/proxy-image');
+
+        return Image.network(
+          displayUrl,
+          fit: BoxFit.cover,
+          // Add cache headers to avoid rechecking repeatedly
+          headers: isProxiedUrl ? {} : null,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return Center(
+              child: CircularProgressIndicator(
+                value: loadingProgress.expectedTotalBytes != null
+                    ? loadingProgress.cumulativeBytesLoaded /
+                        loadingProgress.expectedTotalBytes!
+                    : null,
+              ),
+            );
+          },
+          errorBuilder: (context, error, stackTrace) {
+            // Log error details for debugging
+            dev.log('Error loading image $displayUrl: $error');
+            hasError = true;
+
+            // Detect ProgressEvent errors (usually CORS related)
+            final errorString = error.toString();
+
+            // Check for different error types and classify them
+            if (errorString.contains('[object ProgressEvent]')) {
+              errorMessage = 'CORS Error';
+              // For S3 URLs, this is almost always a 403 Forbidden error
+              if (isS3Url && isPresignedUrl) {
+                errorMessage = 'Access Denied (CORS)';
+                dev.log(
+                    'CORS error with S3 presigned URL - likely 403 Forbidden');
+              }
+            } else if (errorString.contains('403')) {
+              errorMessage = '403 Forbidden';
+            } else if (errorString.contains('401')) {
+              errorMessage = '401 Unauthorized';
+            } else if (errorString.contains('timeout')) {
+              errorMessage = 'Connection Timeout';
+            } else {
+              errorMessage = 'Loading Error';
+            }
+
+            return Container(
+              color: Colors.grey[300],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.broken_image, color: Colors.red[700], size: 32),
+                  Text(
+                    errorMessage!,
+                    style: TextStyle(color: Colors.red[900], fontSize: 12),
+                  ),
+                  const SizedBox(height: 4),
+                  if (isS3Url && isPresignedUrl)
+                    Text(
+                      'S3 presigned URL may have expired',
+                      style: TextStyle(fontSize: 10),
+                      textAlign: TextAlign.center,
+                    ),
+                  if (_isProduction && isS3Url && !isProxiedUrl)
+                    TextButton(
+                      onPressed: isRetrying
+                          ? null
+                          : () async {
+                              setImageState(() {
+                                isRetrying = true;
+                              });
+
+                              // For production and S3 URL, apply proxy solution
+                              final encodedUrl =
+                                  Uri.encodeComponent(originalUrl);
+                              final proxiedUrl =
+                                  '$_apiBaseUrl/api/v1/direct-access?url=$encodedUrl';
+
+                              // Update the URL in the photos list
+                              int index = _photos.indexOf(originalUrl);
+                              if (index >= 0) {
+                                setState(() {
+                                  // We're not changing the original URL in the list,
+                                  // just the display URL by re-rendering the widget
+                                  setImageState(() {
+                                    isRetrying = false;
+                                  });
+                                });
+
+                                // Show the image loading dialog
+                                await showDialog(
+                                  context: context,
+                                  barrierDismissible: false,
+                                  builder: (BuildContext context) {
+                                    return AlertDialog(
+                                      title: Text('Fixing Image Access'),
+                                      content: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          CircularProgressIndicator(),
+                                          SizedBox(height: 16),
+                                          Text('Routing through backend...'),
+                                          SizedBox(height: 8),
+                                          Text(
+                                            'The app is accessing the image through your backend to avoid CORS restrictions.',
+                                            style: TextStyle(fontSize: 12),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                );
+
+                                // Close dialog and rebuild image
+                                Navigator.of(context).pop();
+
+                                // Refresh all photos through the backend
+                                await _fetchPhotos();
+
+                                // Show success message
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text(
+                                          'All images refreshed through backend')),
+                                );
+                              } else {
+                                setImageState(() {
+                                  isRetrying = false;
+                                });
+
+                                // Show error message
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                        'Failed to fix image - please use Settings to refresh all'),
+                                    backgroundColor: Colors.red,
+                                    action: SnackBarAction(
+                                      label: 'Settings',
+                                      onPressed: () {
+                                        showDialog(
+                                          context: context,
+                                          builder: (context) =>
+                                              _buildSettingsDialog(context),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                      child: Text(
+                        isRetrying ? 'Loading...' : 'Fix Image',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  if (!_isProduction && !_useImageProxy)
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _useImageProxy = true;
+                        });
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text('Proxy enabled for all images')),
+                        );
+                      },
+                      child: Text(
+                        'Enable Proxy',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Helper method to build settings dialog
+  Widget _buildSettingsDialog(BuildContext context) {
+    return AlertDialog(
+      title: Text('Image Access Settings'),
+      content: StatefulBuilder(
+        builder: (context, setDialogState) {
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Production mode settings
+                if (_isProduction) ...[
+                  Text(
+                    'S3 Image Access Issues in Production',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 8),
+
+                  // CORS specific issue info
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red[50],
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.red[300]!),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CORS Access Issue Detected',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red[800]),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Your browser is blocking direct access to S3 images due to cross-origin restrictions.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Solution: Generate new presigned URLs for all images by clicking "Refresh All".',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 12),
+
+                  Text(
+                    'If you\'re seeing 403 or CORS errors:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                      '1. Presigned URLs may have expired (typically after 1 hour)'),
+                  Text(
+                      '2. S3 bucket permissions or CORS settings may have changed'),
+                  Text('3. AWS credentials may be invalid'),
+                  SizedBox(height: 12),
+
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.yellow[100],
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.amber),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Technical Details',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text('Session ID: $_cleanSessionId',
+                            style: TextStyle(fontSize: 12)),
+                        Text(
+                          'URLs using presigned method: ${_photos.where((url) => url.contains('X-Amz-Signature')).length}/${_photos.length}',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                // Development mode settings
+                if (!_isProduction) ...[
+                  // Keep existing development mode settings
+                  Text(
+                    'S3 images may return 403 Forbidden in local development',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 8),
+                  // ... Other development settings
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+      actions: [
+        if (_isProduction)
+          TextButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              // Show loading indicator
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Refreshing all image URLs...')),
+              );
+
+              // Fetch new photos with fresh URLs
+              await _fetchPhotos();
+
+              // Show success message
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('All image URLs refreshed')),
+              );
+            },
+            child: Text('Refresh All'),
+          ),
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          child: Text('Close'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -629,53 +1015,133 @@ For local testing, check:
         ),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          if (_accessToken != null && !_isProduction)
+          if (_accessToken != null)
             IconButton(
               icon: Icon(Icons.settings),
               onPressed: () {
                 showDialog(
                   context: context,
                   builder: (context) => AlertDialog(
-                    title: Text('S3 Image Access Settings'),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'S3 images may return 403 Forbidden in local development',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Options to fix:',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                            '1. Enable "Use Proxy" to route S3 requests through backend'),
-                        Text('2. Add a proxy-image endpoint to your backend'),
-                        Text(
-                            '3. Make S3 bucket objects public (not recommended)'),
-                        Text('4. Generate pre-signed URLs on the backend'),
-                        SizedBox(height: 12),
-                        SwitchListTile(
-                          title: Text('Use Image Proxy'),
-                          subtitle:
-                              Text('Route image requests through backend'),
-                          value: _useImageProxy,
-                          onChanged: (value) {
-                            setState(() {
-                              _useImageProxy = value;
-                            });
-                          },
-                        ),
-                      ],
+                    title: Text('Image Access Settings'),
+                    content: StatefulBuilder(
+                      builder: (context, setDialogState) {
+                        return SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Development mode settings
+                              if (!_isProduction) ...[
+                                Text(
+                                  'S3 images may return 403 Forbidden in local development',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                SizedBox(height: 8),
+                                Text(
+                                  'Options to fix:',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                    '1. Enable "Use Proxy" to route S3 requests through backend'),
+                                Text(
+                                    '2. Add a proxy-image endpoint to your backend'),
+                                Text(
+                                    '3. Make S3 bucket objects public (not recommended)'),
+                                Text(
+                                    '4. Generate pre-signed URLs on the backend'),
+                                SizedBox(height: 12),
+                                SwitchListTile(
+                                  title: Text('Use Image Proxy'),
+                                  subtitle: Text(
+                                      'Route image requests through backend'),
+                                  value: _useImageProxy,
+                                  onChanged: (value) {
+                                    setDialogState(() {
+                                      _useImageProxy = value;
+                                    });
+                                    setState(() {}); // Update parent state
+                                  },
+                                ),
+                              ],
+
+                              // Production mode settings
+                              if (_isProduction) ...[
+                                Text(
+                                  'S3 Image Access Issues in Production',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                SizedBox(height: 8),
+                                Text(
+                                  'If you\'re seeing 403 Forbidden errors:',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                    '1. Presigned URLs may have expired (typically after 1 hour)'),
+                                Text(
+                                    '2. S3 bucket permissions may have changed'),
+                                Text('3. AWS credentials may be invalid'),
+                                SizedBox(height: 12),
+                                Text(
+                                  'Troubleshooting:',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                    '• Try the "Refresh URL" button on images with errors'),
+                                Text(
+                                    '• Check that your session is still valid'),
+                                Text(
+                                    '• Contact your administrator if issues persist'),
+                                SizedBox(height: 12),
+                                Container(
+                                  padding: EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.yellow[100],
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.amber),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Technical Details',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                      Text('Session ID: $_cleanSessionId',
+                                          style: TextStyle(fontSize: 12)),
+                                      Text(
+                                          'URLs using presigned method: ${_photos.where((url) => url.contains('X-Amz-Signature')).length}/${_photos.length}',
+                                          style: TextStyle(fontSize: 12)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
+                      },
                     ),
                     actions: [
+                      if (_isProduction)
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            _fetchPhotos(); // Refresh all photos
+                          },
+                          child: Text('Refresh All'),
+                        ),
                       TextButton(
                         onPressed: () {
                           Navigator.of(context).pop();
                         },
-                        child: Text('OK'),
+                        child: Text('Close'),
                       ),
                     ],
                   ),
