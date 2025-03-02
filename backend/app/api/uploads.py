@@ -551,14 +551,54 @@ async def direct_access(url: str, request: Request):
     Takes a URL parameter pointing to the image to proxy.
     Returns the image data with appropriate content type.
     """
-    config = request.app.state.config
     logger.info(f"Direct access request for URL: {url}")
+
+    # Get config or use defaults
+    if hasattr(request.app.state, 'config'):
+        config = request.app.state.config
+        logger.info(f"Using app state config")
+    else:
+        # Fallback configuration
+        logger.warning("No app state config found, using fallback config")
+        from pydantic import BaseModel
+        class FallbackConfig(BaseModel):
+            AWS_BUCKET_NAME: str = "screenmirror-canvas-storage"
+        config = FallbackConfig()
+
+    # Get S3 client - either from app state or create a new one
+    if hasattr(request.app.state, 's3_client'):
+        client = request.app.state.s3_client
+        logger.info("Using app state S3 client")
+    else:
+        logger.warning("Creating new S3 client as none found in app state")
+        client = boto3.client(
+            's3',
+            region_name='ap-south-1',
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+        )
 
     try:
         # Log request headers for debugging
         logger.info(f"Request headers: {request.headers}")
         origin = request.headers.get('origin', 'unknown')
         logger.info(f"Request origin: {origin}")
+
+        # Check if the origin is allowed
+        allowed_origins = os.getenv("ALLOWED_ORIGINS", "https://photo-share-app-id.web.app").split(",")
+        allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
+
+        # In development, allow localhost
+        if os.getenv("ENVIRONMENT") == "development":
+            allowed_origins.append("http://localhost:3000")
+
+        # For testing, you can uncomment this line to allow all origins
+        # allowed_origins.append("*")
+
+        # If the origin is not in our allowed list, set default
+        if origin != "unknown" and origin not in allowed_origins and "*" not in allowed_origins:
+            logger.warning(f"Origin {origin} not in allowed origins: {allowed_origins}")
+            # We will continue processing but will set the correct CORS headers later
 
         # Security check - only allow S3 URLs
         parsed_url = urlparse(url)
@@ -578,7 +618,8 @@ async def direct_access(url: str, request: Request):
             )
 
         # Fetch the actual image data
-        client = request.app.state.s3_client
+        # client = request.app.state.s3_client
+        # (Don't use the above line as we now have client defined earlier)
 
         # Extract bucket and key from URL
         if parsed_url.netloc.startswith('s3.amazonaws.com'):
@@ -628,65 +669,116 @@ async def direct_access(url: str, request: Request):
             # Get the origin from the request headers
             origin = request.headers.get('origin', '*')
 
+            # Set appropriate CORS headers
+            cors_headers = {
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Cache-Control": "public, max-age=86400"  # Cache for 24 hours
+            }
+
+            # Check if origin is allowed
+            allowed_origins = os.getenv("ALLOWED_ORIGINS", "https://photo-share-app-id.web.app").split(",")
+            allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
+            if os.getenv("ENVIRONMENT") == "development":
+                allowed_origins.append("http://localhost:3000")
+
+            # Set Access-Control-Allow-Origin
+            if origin in allowed_origins or "*" in allowed_origins:
+                cors_headers["Access-Control-Allow-Origin"] = origin
+            elif origin != "unknown":
+                # If we have an origin but it's not allowed, use the first allowed origin
+                # This might help in some cases where the domain is the same but with different subdomains
+                if allowed_origins:
+                    cors_headers["Access-Control-Allow-Origin"] = allowed_origins[0]
+                    logger.warning(f"Origin {origin} not allowed, using {allowed_origins[0]} instead")
+                else:
+                    cors_headers["Access-Control-Allow-Origin"] = "https://photo-share-app-id.web.app"
+                    logger.warning(f"No allowed origins found, using default")
+            else:
+                # If no origin, use wildcard for testing
+                cors_headers["Access-Control-Allow-Origin"] = "*"
+                logger.warning(f"No origin found, using wildcard")
+
             # Return with appropriate content type and CORS headers
             return Response(
                 content=data,
                 media_type=content_type,
-                headers={
-                    "Access-Control-Allow-Origin": origin,
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Allow-Methods": "GET, OPTIONS",
-                    "Access-Control-Allow-Headers": "*",
-                    "Cache-Control": "public, max-age=86400"  # Cache for 24 hours
-                }
+                headers=cors_headers
             )
 
         except botocore.exceptions.ClientError as e:
             error_code = e.response['Error']['Code']
             origin = request.headers.get('origin', '*')
 
-            response_headers = {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Credentials": "true",
+            # Create consistent CORS headers for error responses
+            allowed_origins = os.getenv("ALLOWED_ORIGINS", "https://photo-share-app-id.web.app").split(",")
+            allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
+            if os.getenv("ENVIRONMENT") == "development":
+                allowed_origins.append("http://localhost:3000")
+
+            cors_headers = {
                 "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
             }
+
+            if origin in allowed_origins or "*" in allowed_origins:
+                cors_headers["Access-Control-Allow-Origin"] = origin
+            elif origin != "unknown" and allowed_origins:
+                cors_headers["Access-Control-Allow-Origin"] = allowed_origins[0]
+            else:
+                cors_headers["Access-Control-Allow-Origin"] = "*"
 
             if error_code == 'NoSuchKey':
                 logger.error(f"S3 object not found: {bucket_name}/{object_key}")
                 return JSONResponse(
                     status_code=404,
                     content={"detail": "Image not found in S3"},
-                    headers=response_headers
+                    headers=cors_headers
                 )
             elif error_code == 'AccessDenied':
                 logger.error(f"Access denied to S3 object: {bucket_name}/{object_key}")
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Access denied to the requested image"},
-                    headers=response_headers
+                    headers=cors_headers
                 )
             else:
                 logger.error(f"S3 error: {error_code} - {str(e)}")
                 return JSONResponse(
                     status_code=500,
                     content={"detail": f"S3 error: {error_code}"},
-                    headers=response_headers
+                    headers=cors_headers
                 )
 
     except Exception as e:
         logger.error(f"Error proxying image: {str(e)}")
         origin = request.headers.get('origin', '*')
 
+        # Create consistent CORS headers for general error response
+        allowed_origins = os.getenv("ALLOWED_ORIGINS", "https://photo-share-app-id.web.app").split(",")
+        allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
+        if os.getenv("ENVIRONMENT") == "development":
+            allowed_origins.append("http://localhost:3000")
+
+        cors_headers = {
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        }
+
+        if origin in allowed_origins or "*" in allowed_origins:
+            cors_headers["Access-Control-Allow-Origin"] = origin
+        elif origin != "unknown" and allowed_origins:
+            cors_headers["Access-Control-Allow-Origin"] = allowed_origins[0]
+        else:
+            cors_headers["Access-Control-Allow-Origin"] = "*"
+
         return JSONResponse(
             status_code=500,
             content={"detail": f"Failed to proxy image: {str(e)}"},
-            headers={
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
-            }
+            headers=cors_headers
         )
 
 @router.options("/direct-access")
@@ -694,15 +786,37 @@ async def direct_access_options(request: Request):
     """Handle OPTIONS requests for CORS preflight checks."""
     origin = request.headers.get('origin', '*')
 
+    # Check if origin is allowed
+    allowed_origins = os.getenv("ALLOWED_ORIGINS", "https://photo-share-app-id.web.app").split(",")
+    allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
+    if os.getenv("ENVIRONMENT") == "development":
+        allowed_origins.append("http://localhost:3000")
+
+    # Create CORS headers
+    cors_headers = {
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Max-Age": "3600",
+    }
+
+    # Set Access-Control-Allow-Origin
+    if origin in allowed_origins or "*" in allowed_origins:
+        cors_headers["Access-Control-Allow-Origin"] = origin
+    elif origin != "unknown":
+        if allowed_origins:
+            cors_headers["Access-Control-Allow-Origin"] = allowed_origins[0]
+            logger.warning(f"OPTIONS: Origin {origin} not allowed, using {allowed_origins[0]} instead")
+        else:
+            cors_headers["Access-Control-Allow-Origin"] = "https://photo-share-app-id.web.app"
+            logger.warning(f"OPTIONS: No allowed origins found, using default")
+    else:
+        cors_headers["Access-Control-Allow-Origin"] = "*"
+        logger.warning(f"OPTIONS: No origin found, using wildcard")
+
     return Response(
         content="",
-        headers={
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Max-Age": "3600",
-        }
+        headers=cors_headers
     )
 
 # Add new model for proxy upload request
