@@ -10,6 +10,8 @@ import io
 from pydantic import BaseModel
 from fastapi.responses import Response, JSONResponse
 from urllib.parse import urlparse, parse_qs
+import base64
+import httpx
 
 # Load environment variables
 load_dotenv()
@@ -636,4 +638,81 @@ async def direct_access(url: str, request: Request):
         return JSONResponse(
             status_code=500,
             content={"detail": f"Failed to proxy image: {str(e)}"}
+        )
+
+# Add new model for proxy upload request
+class ProxyUploadRequest(BaseModel):
+    presigned_url: str
+    file_content: str  # Base64 encoded file content
+
+@router.post("/proxy-upload")
+async def proxy_upload(
+    request: ProxyUploadRequest,
+    s3_client = Depends(get_s3_client)
+):
+    """
+    Proxy endpoint to help web clients bypass CORS restrictions when uploading to S3.
+    Takes a presigned URL and base64-encoded file content, then uploads the file to S3.
+    """
+    try:
+        logger.info("Received proxy upload request")
+
+        # Parse the URL to extract important information
+        parsed_url = urlparse(request.presigned_url)
+
+        # Decode the base64 file content
+        try:
+            file_content = base64.b64decode(request.file_content)
+        except Exception as e:
+            logger.error(f"Failed to decode base64 content: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid base64 encoding: {str(e)}"
+            )
+
+        # Create a file-like object from the decoded content
+        file_obj = io.BytesIO(file_content)
+
+        # Make the request to S3 using the presigned URL
+        async with httpx.AsyncClient() as client:
+            # Extract content type from presigned URL query parameters if available
+            query_params = parse_qs(parsed_url.query)
+            content_type = "image/jpeg"  # Default content type
+
+            if "Content-Type" in query_params:
+                content_type = query_params["Content-Type"][0]
+
+            # Make the PUT request to S3
+            response = await client.put(
+                request.presigned_url,
+                content=file_content,
+                headers={"Content-Type": content_type}
+            )
+
+            if response.status_code not in [200, 204]:
+                logger.error(f"S3 upload failed: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"S3 upload failed: {response.text}"
+                )
+
+        return {"success": True, "message": "File uploaded successfully via proxy"}
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except ClientError as e:
+        error_response = e.response.get('Error', {})
+        error_code = error_response.get('Code', 'Unknown')
+        error_message = error_response.get('Message', str(e))
+        logger.error(f"S3 ClientError in proxy upload: {error_code} - {error_message}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"S3 error: {error_code} - {error_message}"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in proxy upload: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Proxy upload failed: {str(e)}"
         )

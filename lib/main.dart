@@ -415,6 +415,21 @@ Check:
             'Got ${presignedUrls.length} presigned URLs. Uploading files...';
       });
 
+      // Create a separate list of URLs that we'll return to create the session
+      List<String> publicUrls = [];
+
+      // We need to construct public URLs for the uploaded files
+      for (int i = 0; i < presignedUrls.length; i++) {
+        final Uri presignedUri = Uri.parse(presignedUrls[i]);
+        final String path = presignedUri.path;
+        final String host = presignedUri.host;
+
+        // Extract the bucket name from the host (if available)
+        // The format will typically be: {bucket-name}.s3.{region}.amazonaws.com
+        final String publicUrl = 'https://$host$path';
+        publicUrls.add(publicUrl);
+      }
+
       // Upload each file using its presigned URL
       for (int i = 0;
           i < _selectedImages.length && i < presignedUrls.length;
@@ -427,19 +442,51 @@ Check:
               'Uploading file ${i + 1} of ${_selectedImages.length}...';
         });
 
-        // Read file as bytes
-        final bytes = await image.originalFile.readAsBytes();
+        try {
+          // Read file as bytes
+          final bytes = await image.originalFile.readAsBytes();
 
-        // Upload to S3 using presigned URL
-        final uploadResponse = await http.put(
-          Uri.parse(presignedUrl),
-          headers: {'Content-Type': 'image/jpeg'},
-          body: bytes,
-        );
+          // Different implementation for web vs mobile
+          if (kIsWeb) {
+            // For web, we need to work around CORS by using a proxy server
+            // or by proxying the upload through our backend
 
-        if (uploadResponse.statusCode != 200) {
-          throw Exception(
-              'Failed to upload file ${i + 1}: ${uploadResponse.statusCode}');
+            // Option 1: Use our backend as a proxy for the upload
+            final proxyResponse = await http.post(
+              Uri.parse('$_apiBaseUrl/api/v1/proxy-upload'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'presigned_url': presignedUrl,
+                'file_content': base64Encode(bytes),
+              }),
+            );
+
+            if (proxyResponse.statusCode != 200) {
+              throw Exception(
+                  'Failed to upload file ${i + 1} via proxy: ${proxyResponse.statusCode} - ${proxyResponse.body}');
+            }
+
+            print('Successfully uploaded file ${i + 1} through proxy server');
+          } else {
+            // For mobile, we can use HttpClient which bypasses CORS
+            final request = await HttpClient().putUrl(Uri.parse(presignedUrl));
+            request.headers.set('Content-Type', 'image/jpeg');
+            request.add(bytes);
+
+            final response = await request.close();
+            final responseBody = await response.transform(utf8.decoder).join();
+
+            if (response.statusCode != 200) {
+              throw Exception(
+                  'Failed to upload file ${i + 1}: ${response.statusCode} - $responseBody');
+            }
+
+            print(
+                'Successfully uploaded file ${i + 1} with status code: ${response.statusCode}');
+          }
+        } catch (e) {
+          print('Error uploading file ${i + 1}: $e');
+          throw Exception('Failed to upload file ${i + 1}: $e');
         }
       }
 
@@ -447,8 +494,8 @@ Check:
         _statusMessage = 'Upload successful! Session ID: $sessionId';
       });
 
-      // Return the presigned URLs
-      return presignedUrls;
+      // Return the public URLs for creating the session
+      return publicUrls;
     } catch (e) {
       print('Error during presigned URL upload: $e');
       setState(() {
