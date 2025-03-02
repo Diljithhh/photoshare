@@ -1,6 +1,7 @@
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, Header, Request
 import boto3
 from botocore.exceptions import ClientError
+import botocore
 import uuid
 from typing import List
 import os
@@ -12,6 +13,13 @@ from fastapi.responses import Response, JSONResponse
 from urllib.parse import urlparse, parse_qs
 import base64
 import httpx
+
+
+
+
+
+from fastapi.middleware.cors import CORSMiddleware
+
 
 # Load environment variables
 load_dotenv()
@@ -547,6 +555,11 @@ async def direct_access(url: str, request: Request):
     logger.info(f"Direct access request for URL: {url}")
 
     try:
+        # Log request headers for debugging
+        logger.info(f"Request headers: {request.headers}")
+        origin = request.headers.get('origin', 'unknown')
+        logger.info(f"Request origin: {origin}")
+
         # Security check - only allow S3 URLs
         parsed_url = urlparse(url)
         is_s3_url = ".s3." in parsed_url.netloc or "s3.amazonaws.com" in parsed_url.netloc
@@ -555,7 +568,13 @@ async def direct_access(url: str, request: Request):
             logger.warning(f"Attempted to proxy non-S3 URL: {url}")
             return JSONResponse(
                 status_code=403,
-                content={"detail": "Only S3 URLs can be proxied for security reasons"}
+                content={"detail": "Only S3 URLs can be proxied for security reasons"},
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "*"
+                }
             )
 
         # Fetch the actual image data
@@ -606,39 +625,85 @@ async def direct_access(url: str, request: Request):
             # Stream the data
             data = response['Body'].read()
 
-            # Return with appropriate content type
+            # Get the origin from the request headers
+            origin = request.headers.get('origin', '*')
+
+            # Return with appropriate content type and CORS headers
             return Response(
                 content=data,
-                media_type=content_type
+                media_type=content_type,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Cache-Control": "public, max-age=86400"  # Cache for 24 hours
+                }
             )
 
         except botocore.exceptions.ClientError as e:
             error_code = e.response['Error']['Code']
+            origin = request.headers.get('origin', '*')
+
+            response_headers = {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*"
+            }
+
             if error_code == 'NoSuchKey':
                 logger.error(f"S3 object not found: {bucket_name}/{object_key}")
                 return JSONResponse(
                     status_code=404,
-                    content={"detail": "Image not found in S3"}
+                    content={"detail": "Image not found in S3"},
+                    headers=response_headers
                 )
             elif error_code == 'AccessDenied':
                 logger.error(f"Access denied to S3 object: {bucket_name}/{object_key}")
                 return JSONResponse(
                     status_code=403,
-                    content={"detail": "Access denied to the requested image"}
+                    content={"detail": "Access denied to the requested image"},
+                    headers=response_headers
                 )
             else:
                 logger.error(f"S3 error: {error_code} - {str(e)}")
                 return JSONResponse(
                     status_code=500,
-                    content={"detail": f"S3 error: {error_code}"}
+                    content={"detail": f"S3 error: {error_code}"},
+                    headers=response_headers
                 )
 
     except Exception as e:
         logger.error(f"Error proxying image: {str(e)}")
+        origin = request.headers.get('origin', '*')
+
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Failed to proxy image: {str(e)}"}
+            content={"detail": f"Failed to proxy image: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*"
+            }
         )
+
+@router.options("/direct-access")
+async def direct_access_options(request: Request):
+    """Handle OPTIONS requests for CORS preflight checks."""
+    origin = request.headers.get('origin', '*')
+
+    return Response(
+        content="",
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "3600",
+        }
+    )
 
 # Add new model for proxy upload request
 class ProxyUploadRequest(BaseModel):

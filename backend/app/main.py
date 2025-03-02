@@ -26,14 +26,13 @@ app = FastAPI(
 )
 
 # Get allowed origins from environment variable
-# allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
-# # For local development, add any frontend origin
-# if os.getenv("ENVIRONMENT") == "development":
-#     allowed_origins = ["*"]  # Allow all origins in development
-
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "https://photo-share-app-id.web.app").split(",")
 if os.getenv("ENVIRONMENT") == "development":
     allowed_origins.append("http://localhost:3000")
+# Ensure we don't have empty strings in the list
+allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip()]
+# Add wildcard option for testing if needed
+# allowed_origins.append("*")
 print(f"CORS allowed origins: {allowed_origins}")
 
 # Add CORS middleware
@@ -43,6 +42,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Type", "Content-Length", "Content-Disposition"],
+    max_age=3600,
 )
 
 # Include the photo router
