@@ -187,12 +187,6 @@ class _SessionViewState extends State<SessionView> {
       // Make sure the endpoint format matches what the backend expects
       final endpoint = '$_apiBaseUrl/api/v1/session/${_cleanSessionId}/auth';
 
-      dev.log('AUTHENTICATION DEBUG:');
-      dev.log('API Base URL: $_apiBaseUrl');
-      dev.log('Endpoint: $endpoint');
-      dev.log('Clean Session ID: ${_cleanSessionId}');
-      dev.log('Original Session ID: ${widget.sessionId}');
-
       // Test if the endpoint is accessible
       try {
         final testResponse = await http.get(Uri.parse(_apiBaseUrl)).timeout(
@@ -451,218 +445,652 @@ For local testing, check:
     }
   }
 
-  Widget _buildAuthenticationView() {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Environment toggle - only show in debug mode
-          Card(
-            margin: const EdgeInsets.only(bottom: 16),
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Development Settings',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Environment:'),
-                      Row(
-                        children: [
-                          const Text('Local'),
-                          Switch(
-                            value: _isProduction,
-                            onChanged: (value) {
-                              setState(() {
-                                _isProduction = value;
-                                // Clear any existing error when switching
-                                _errorMessage = null;
-                              });
-                              dev.log(
-                                  'Using ${_isProduction ? "production" : "local"} environment');
-                            },
-                          ),
-                          const Text('Production'),
-                        ],
-                      ),
-                    ],
+  // Widget _buildAuthenticationView() {
+  //   return Padding(
+  //     padding: const EdgeInsets.all(16.0),
+  //     child: Column(
+  //       mainAxisAlignment: MainAxisAlignment.center,
+  //       children: [
+  //         // Environment toggle - only show in debug mode
+  //         Card(
+  //           margin: const EdgeInsets.only(bottom: 16),
+  //           child: Padding(
+  //             padding: const EdgeInsets.all(8.0),
+  //             child: Column(
+  //               crossAxisAlignment: CrossAxisAlignment.start,
+  //               children: [
+  //                 const Text('Development Settings',
+  //                     style: TextStyle(fontWeight: FontWeight.bold)),
+  //                 const SizedBox(height: 8),
+  //                 Row(
+  //                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  //                   children: [
+  //                     const Text('Environment:'),
+  //                     Row(
+  //                       children: [
+  //                         const Text('Local'),
+  //                         Switch(
+  //                           value: _isProduction,
+  //                           onChanged: (value) {
+  //                             setState(() {
+  //                               _isProduction = value;
+  //                               // Clear any existing error when switching
+  //                               _errorMessage = null;
+  //                             });
+  //                             dev.log(
+  //                                 'Using ${_isProduction ? "production" : "local"} environment');
+  //                           },
+  //                         ),
+  //                         const Text('Production'),
+  //                       ],
+  //                     ),
+  //                   ],
+  //                 ),
+  //                 // Only show image proxy toggle in local development
+  //                 if (!_isProduction)
+  //                   Row(
+  //                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  //                     children: [
+  //                       const Text('Handle S3 Access:'),
+  //                       Row(
+  //                         children: [
+  //                           Switch(
+  //                             value: _useImageProxy,
+  //                             onChanged: (value) {
+  //                               setState(() {
+  //                                 _useImageProxy = value;
+  //                               });
+  //                               dev.log(
+  //                                   'Image proxy ${_useImageProxy ? "enabled" : "disabled"}');
+  //                             },
+  //                           ),
+  //                           const Text('Use Proxy'),
+  //                         ],
+  //                       ),
+  //                     ],
+  //                   ),
+  //                 Text('API URL: $_apiBaseUrl',
+  //                     style: const TextStyle(fontSize: 12)),
+  //                 Text('Session ID: $_cleanSessionId',
+  //                     style: const TextStyle(fontSize: 12)),
+  //               ],
+  //             ),
+  //           ),
+  //         ),
+  //         TextField(
+  //           controller: _passwordController,
+  //           decoration: const InputDecoration(
+  //             labelText: 'Enter Password',
+  //             border: OutlineInputBorder(),
+  //           ),
+  //           obscureText: true,
+  //           onSubmitted: (_) => _authenticate(),
+  //         ),
+  //         const SizedBox(height: 16),
+  //         ElevatedButton(
+  //           onPressed: _isLoading ? null : _authenticate,
+  //           child: _isLoading
+  //               ? const CircularProgressIndicator()
+  //               : const Text('View Photos'),
+  //         ),
+  //         if (_errorMessage != null)
+  //           Padding(
+  //             padding: const EdgeInsets.only(top: 16),
+  //             child: Container(
+  //               padding: const EdgeInsets.all(8),
+  //               color: Colors.red[100],
+  //               width: double.infinity,
+  //               child: Text(
+  //                 _errorMessage!,
+  //                 style: TextStyle(color: Colors.red[900]),
+  //               ),
+  //             ),
+  //           ),
+  //       ],
+  //     ),
+  //   );
+  // }
+
+  // Widget _buildAuthenticationView() {
+  //   return Padding(
+  //     padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
+  //     child: Column(
+  //       mainAxisAlignment: MainAxisAlignment.center,
+  //       crossAxisAlignment: CrossAxisAlignment.stretch,
+  //       children: [
+  //         // Development Settings Card
+  //         if (!_isProduction)
+  //           Card(
+  //             elevation: 0,
+  //             shape: RoundedRectangleBorder(
+  //               borderRadius: BorderRadius.circular(12),
+  //               side: BorderSide(color: Colors.grey[300]!),
+  //             ),
+  //             child: Padding(
+  //               padding: const EdgeInsets.all(16.0),
+  //               child: Column(
+  //                 crossAxisAlignment: CrossAxisAlignment.start,
+  //                 children: [
+  //                   Text('Development Settings',
+  //                       style: TextStyle(
+  //                           fontWeight: FontWeight.bold,
+  //                           fontSize: 18,
+  //                           color: Colors.grey[800])),
+  //                   const SizedBox(height: 16),
+  //                   _buildToggleRow('Environment', _isProduction,
+  //                       (value) => setState(() => _isProduction = value)),
+  //                   if (!_isProduction)
+  //                     _buildToggleRow('Handle S3 Access', _useImageProxy,
+  //                         (value) => setState(() => _useImageProxy = value)),
+  //                   const SizedBox(height: 8),
+  //                   Text('API URL: $_apiBaseUrl',
+  //                       style:
+  //                           TextStyle(fontSize: 12, color: Colors.grey[600])),
+  //                   Text('Session ID: $_cleanSessionId',
+  //                       style:
+  //                           TextStyle(fontSize: 12, color: Colors.grey[600])),
+  //                 ],
+  //               ),
+  //             ),
+  //           ),
+  //         const SizedBox(height: 32),
+  //         // Password TextField
+  //         TextField(
+  //           controller: _passwordController,
+  //           decoration: InputDecoration(
+  //             labelText: 'Enter Password',
+  //             border: OutlineInputBorder(
+  //               borderRadius: BorderRadius.circular(12),
+  //               borderSide: BorderSide.none,
+  //             ),
+  //             filled: true,
+  //             fillColor: Colors.grey[200],
+  //             prefixIcon: Icon(Icons.lock_outline, color: Colors.grey[600]),
+  //           ),
+  //           obscureText: true,
+  //           onSubmitted: (_) => _authenticate(),
+  //         ),
+  //         const SizedBox(height: 24),
+  //         // Authentication Button
+  //         ElevatedButton(
+  //           onPressed: _isLoading ? null : _authenticate,
+  //           style: ElevatedButton.styleFrom(
+  //             backgroundColor: Colors.blue,
+  //             foregroundColor: Colors.white,
+  //             padding: const EdgeInsets.symmetric(vertical: 16),
+  //             shape: RoundedRectangleBorder(
+  //               borderRadius: BorderRadius.circular(12),
+  //             ),
+  //           ),
+  //           child: _isLoading
+  //               ? const SizedBox(
+  //                   height: 20,
+  //                   width: 20,
+  //                   child: CircularProgressIndicator(
+  //                     strokeWidth: 2,
+  //                     valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+  //                   ),
+  //                 )
+  //               : const Text('View Photos',
+  //                   style: TextStyle(color: Colors.green)),
+  //         ),
+  //         if (_errorMessage != null)
+  //           Padding(
+  //             padding: const EdgeInsets.only(top: 24),
+  //             child: Container(
+  //               padding: const EdgeInsets.all(12),
+  //               decoration: BoxDecoration(
+  //                 color: Colors.red[50],
+  //                 borderRadius: BorderRadius.circular(8),
+  //               ),
+  //               child: Text(
+  //                 _errorMessage!,
+  //                 style: TextStyle(color: Colors.red[700]),
+  //                 textAlign: TextAlign.center,
+  //               ),
+  //             ),
+  //           ),
+  //       ],
+  //     ),
+  //   );
+  // }
+
+Widget _buildAuthenticationView() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      // Header
+      // _buildHeader(),
+
+      // Main content
+      Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Text(
+              'Secure Access',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Enter the password to view shared photos',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 48),
+            _buildAuthenticationForm(),
+          ],
+        ),
+      ),
+
+      // Footer
+      // _buildFooter(),
+    ],
+  );
+}
+
+Widget _buildAuthenticationForm() {
+  return Container(
+    margin: const EdgeInsets.symmetric(vertical: 16),
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.grey.shade300, width: 1),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    padding: const EdgeInsets.all(32),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!_isProduction) _buildDevelopmentSettings(),
+        TextField(
+          controller: _passwordController,
+          decoration: InputDecoration(
+            labelText: 'Enter Password',
+            border: const OutlineInputBorder(),
+            filled: true,
+            fillColor: Colors.grey[50],
+          ),
+          obscureText: true,
+          onSubmitted: (_) => _authenticate(),
+        ),
+        const SizedBox(height: 24),
+        ElevatedButton(
+          onPressed: _isLoading ? null : _authenticate,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blueGrey[700],
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            minimumSize: const Size(double.infinity, 48),
+          ),
+          child: _isLoading
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                   ),
-                  // Only show image proxy toggle in local development
-                  if (!_isProduction)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Handle S3 Access:'),
-                        Row(
-                          children: [
-                            Switch(
-                              value: _useImageProxy,
-                              onChanged: (value) {
-                                setState(() {
-                                  _useImageProxy = value;
-                                });
-                                dev.log(
-                                    'Image proxy ${_useImageProxy ? "enabled" : "disabled"}');
-                              },
-                            ),
-                            const Text('Use Proxy'),
-                          ],
-                        ),
-                      ],
-                    ),
-                  Text('API URL: $_apiBaseUrl',
-                      style: const TextStyle(fontSize: 12)),
-                  Text('Session ID: $_cleanSessionId',
-                      style: const TextStyle(fontSize: 12)),
-                ],
-              ),
+                )
+              : const Text('View Photos'),
+        ),
+        if (_errorMessage != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: Text(
+              _errorMessage!,
+              style: const TextStyle(color: Colors.red),
+              textAlign: TextAlign.center,
             ),
           ),
-          TextField(
-            controller: _passwordController,
-            decoration: const InputDecoration(
-              labelText: 'Enter Password',
-              border: OutlineInputBorder(),
-            ),
-            obscureText: true,
-            onSubmitted: (_) => _authenticate(),
+      ],
+    ),
+  );
+}
+
+Widget _buildDevelopmentSettings() {
+  return Container(
+    margin: const EdgeInsets.only(bottom: 24),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.blueGrey[50],
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Development Settings',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
           ),
-          const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: _isLoading ? null : _authenticate,
-            child: _isLoading
-                ? const CircularProgressIndicator()
-                : const Text('View Photos'),
+        ),
+        const SizedBox(height: 16),
+        _buildSettingSwitch(
+          'Environment',
+          'Local',
+          'Production',
+          _isProduction,
+          (value) => setState(() => _isProduction = value),
+        ),
+        if (!_isProduction)
+          _buildSettingSwitch(
+            'Handle S3 Access',
+            'Direct',
+            'Proxy',
+            _useImageProxy,
+            (value) => setState(() => _useImageProxy = value),
           ),
-          if (_errorMessage != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                color: Colors.red[100],
-                width: double.infinity,
-                child: Text(
-                  _errorMessage!,
-                  style: TextStyle(color: Colors.red[900]),
-                ),
-              ),
-            ),
+        const SizedBox(height: 8),
+        Text('API URL: $_apiBaseUrl',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+        Text('Session ID: $_cleanSessionId',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+      ],
+    ),
+  );
+}
+
+Widget _buildSettingSwitch(
+  String label,
+  String leftText,
+  String rightText,
+  bool value,
+  Function(bool) onChanged,
+) {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(label),
+      Row(
+        children: [
+          Text(leftText,
+              style: TextStyle(fontSize: 14, color: Colors.grey[700])),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: Colors.blueGrey[700],
+          ),
+          Text(rightText,
+              style: TextStyle(fontSize: 14, color: Colors.grey[700])),
+        ],
+      ),
+    ],
+  );
+}
+
+  Widget _buildToggleRow(String label, bool value, Function(bool) onChanged) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: Colors.grey[700])),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: Colors.blue,
+          ),
         ],
       ),
     );
   }
-
-  Widget _buildPhotoGrid() {
-    return Column(
-      children: [
-        if (!_isProduction && _photos.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.all(8),
-            color: Colors.blue[100],
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'S3 Access: ${_useImageProxy ? "Using proxy" : "Direct S3"}',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  'Image Count: ${_photos.length}',
-                  style: TextStyle(fontSize: 12),
-                ),
-                if (_photos.isNotEmpty && !_useImageProxy)
-                  Text(
-                    '⚠️ If images fail to load with 403 error, enable "Use Proxy" in settings',
-                    style: TextStyle(color: Colors.red[800]),
-                  ),
-              ],
-            ),
+Widget _buildPhotoGrid() {
+  return Column(
+    children: [
+      if (!_isProduction && _photos.isNotEmpty)
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blueGrey[200]!),
           ),
-        // Production environment banner for S3 access issues
-        if (_isProduction && _photos.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.all(8),
-            color: Colors.amber[100],
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'S3 Photo Access: Production Mode',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  'If images fail with 403 errors, they may have expired. Contact support.',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        Expanded(
-          child: _photos.isEmpty
-              ? const Center(child: Text('No photos available'))
-              : MasonryGridView.count(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 4,
-                  crossAxisSpacing: 4,
-                  itemCount: _photos.length,
-                  itemBuilder: (context, index) {
-                    final originalUrl = _photos[index];
-                    final displayUrl = _transformImageUrl(originalUrl);
-                    final isSelected = _selectedPhotos.contains(originalUrl);
-
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          if (isSelected) {
-                            _selectedPhotos.remove(originalUrl);
-                          } else {
-                            _selectedPhotos.add(originalUrl);
-                          }
-                        });
-                      },
-                      child: Stack(
-                        children: [
-                          _buildImageWithRetry(displayUrl, originalUrl),
-                          if (isSelected)
-                            Positioned.fill(
-                              child: Container(
-                                color: Colors.blue.withOpacity(0.3),
-                                child: const Icon(
-                                  Icons.check_circle,
-                                  color: Colors.white,
-                                  size: 40,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${_selectedPhotos.length} photos selected'),
-              const Spacer(),
-              ElevatedButton(
-                onPressed: _selectedPhotos.isEmpty ? null : _saveSelections,
-                child: _isLoading
-                    ? const CircularProgressIndicator()
-                    : const Text('Save Selections'),
+              Text(
+                'S3 Access: ${_useImageProxy ? "Using proxy" : "Direct S3"}',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blueGrey[800],
+                ),
               ),
+              const SizedBox(height: 4),
+              Text(
+                'Image Count: ${_photos.length}',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.blueGrey[600],
+                ),
+              ),
+              if (_photos.isNotEmpty && !_useImageProxy)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '⚠️ If images fail to load with 403 error, enable "Use Proxy" in settings',
+                    style: TextStyle(
+                      color: Colors.red[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
-      ],
-    );
-  }
+      Expanded(
+        child: _photos.isEmpty
+            ? Center(
+                child: Text(
+                  'No photos available',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              )
+            : MasonryGridView.count(
+                crossAxisCount: 6,
+                mainAxisSpacing: 4,
+                crossAxisSpacing: 4,
+                itemCount: _photos.length,
+                itemBuilder: (context, index) {
+                  final originalUrl = _photos[index];
+                  final displayUrl = _transformImageUrl(originalUrl);
+                  final isSelected = _selectedPhotos.contains(originalUrl);
+
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        if (isSelected) {
+                          _selectedPhotos.remove(originalUrl);
+                        } else {
+                          _selectedPhotos.add(originalUrl);
+                        }
+                      });
+                    },
+                    child: Stack(
+                      children: [
+                        _buildImageWithRetry(displayUrl, originalUrl),
+                        if (isSelected)
+                          Positioned.fill(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.blueGrey[700]!.withOpacity(0.7),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Icon(
+                                Icons.check_circle,
+                                color: Colors.white,
+                                size: 40,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 4,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Text(
+              '${_selectedPhotos.length} photos selected',
+              style: TextStyle(
+                color: Colors.blueGrey[700],
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const Spacer(),
+            ElevatedButton(
+              onPressed: _selectedPhotos.isEmpty ? null : _saveSelections,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueGrey[700],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: _isLoading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const Text('Save Selections'),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+  // Widget _buildPhotoGrid() {
+  //   return Column(
+  //     children: [
+  //       if (!_isProduction && _photos.isNotEmpty)
+  //         Container(
+  //           padding: const EdgeInsets.all(8),
+  //           color: Colors.blue[100],
+  //           child: Column(
+  //             crossAxisAlignment: CrossAxisAlignment.start,
+  //             children: [
+  //               Text(
+  //                 'S3 Access: ${_useImageProxy ? "Using proxy" : "Direct S3"}',
+  //                 style: const TextStyle(fontWeight: FontWeight.bold),
+  //               ),
+  //               Text(
+  //                 'Image Count: ${_photos.length}',
+  //                 style: const TextStyle(fontSize: 12),
+  //               ),
+  //               if (_photos.isNotEmpty && !_useImageProxy)
+  //                 Text(
+  //                   '⚠️ If images fail to load with 403 error, enable "Use Proxy" in settings',
+  //                   style: TextStyle(color: Colors.red[800]),
+  //                 ),
+  //             ],
+  //           ),
+  //         ),
+  //       // Production environment banner for S3 access issues
+  //       if (_isProduction && _photos.isNotEmpty)
+  //         // Container(
+  //         //   padding: const EdgeInsets.all(8),
+  //         //   color: Colors.amber[100],
+  //         //   child: Column(
+  //         //     crossAxisAlignment: CrossAxisAlignment.start,
+  //         //     children: [
+  //         //       Text(
+  //         //         'S3 Photo Access: Production Mode',
+  //         //         style: TextStyle(fontWeight: FontWeight.bold),
+  //         //       ),
+  //         //       Text(
+  //         //         'If images fail with 403 errors, they may have expired. Contact support.',
+  //         //         style: TextStyle(fontSize: 12),
+  //         //       ),
+  //         //     ],
+  //         //   ),
+  //         // ),
+  //         Expanded(
+  //           child: _photos.isEmpty
+  //               ? const Center(child: Text('No photos available'))
+  //               : MasonryGridView.count(
+  //                   crossAxisCount: 6,
+  //                   mainAxisSpacing: 4,
+  //                   crossAxisSpacing: 4,
+  //                   itemCount: _photos.length,
+  //                   itemBuilder: (context, index) {
+  //                     final originalUrl = _photos[index];
+  //                     final displayUrl = _transformImageUrl(originalUrl);
+  //                     final isSelected = _selectedPhotos.contains(originalUrl);
+
+  //                     return GestureDetector(
+  //                       onTap: () {
+  //                         setState(() {
+  //                           if (isSelected) {
+  //                             _selectedPhotos.remove(originalUrl);
+  //                           } else {
+  //                             _selectedPhotos.add(originalUrl);
+  //                           }
+  //                         });
+  //                       },
+  //                       child: Stack(
+  //                         children: [
+  //                           _buildImageWithRetry(displayUrl, originalUrl),
+  //                           if (isSelected)
+  //                             Positioned.fill(
+  //                               child: Container(
+  //                                 color: Colors.blue.withOpacity(0.3),
+  //                                 child: const Icon(
+  //                                   Icons.check_circle,
+  //                                   color: Colors.white,
+  //                                   size: 40,
+  //                                 ),
+  //                               ),
+  //                             ),
+  //                         ],
+  //                       ),
+  //                     );
+  //                   },
+  //                 ),
+  //         ),
+  //       Padding(
+  //         padding: const EdgeInsets.all(16.0),
+  //         child: Row(
+  //           children: [
+  //             Text('${_selectedPhotos.length} photos selected'),
+  //             const Spacer(),
+  //             ElevatedButton(
+  //               onPressed: _selectedPhotos.isEmpty ? null : _saveSelections,
+  //               child: _isLoading
+  //                   ? const CircularProgressIndicator()
+  //                   : const Text('Save Selections'),
+  //             ),
+  //           ],
+  //         ),
+  //       ),
+  //     ],
+  //   );
+  // }
 
   // Build image with retry mechanism
   Widget _buildImageWithRetry(String displayUrl, String originalUrl) {
@@ -734,7 +1162,7 @@ For local testing, check:
                   ),
                   const SizedBox(height: 4),
                   if (isS3Url && isPresignedUrl)
-                    Text(
+                    const Text(
                       'S3 presigned URL may have expired',
                       style: TextStyle(fontSize: 10),
                       textAlign: TextAlign.center,
@@ -770,7 +1198,7 @@ For local testing, check:
                                   context: context,
                                   barrierDismissible: false,
                                   builder: (BuildContext context) {
-                                    return AlertDialog(
+                                    return const AlertDialog(
                                       title: Text('Fixing Image Access'),
                                       content: Column(
                                         mainAxisSize: MainAxisSize.min,
@@ -797,7 +1225,7 @@ For local testing, check:
 
                                 // Show success message
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
+                                  const SnackBar(
                                       content: Text(
                                           'All images refreshed through backend')),
                                 );
@@ -809,7 +1237,7 @@ For local testing, check:
                                 // Show error message
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text(
+                                    content: const Text(
                                         'Failed to fix image - please use Settings to refresh all'),
                                     backgroundColor: Colors.red,
                                     action: SnackBarAction(
@@ -828,7 +1256,7 @@ For local testing, check:
                             },
                       child: Text(
                         isRetrying ? 'Loading...' : 'Fix Image',
-                        style: TextStyle(fontSize: 12),
+                        style: const TextStyle(fontSize: 12),
                       ),
                     ),
                   if (!_isProduction && !_useImageProxy)
@@ -839,11 +1267,11 @@ For local testing, check:
                         });
 
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
+                          const SnackBar(
                               content: Text('Proxy enabled for all images')),
                         );
                       },
-                      child: Text(
+                      child: const Text(
                         'Enable Proxy',
                         style: TextStyle(fontSize: 12),
                       ),
@@ -860,7 +1288,7 @@ For local testing, check:
   // Helper method to build settings dialog
   Widget _buildSettingsDialog(BuildContext context) {
     return AlertDialog(
-      title: Text('Image Access Settings'),
+      title: const Text('Image Access Settings'),
       content: StatefulBuilder(
         builder: (context, setDialogState) {
           return SingleChildScrollView(
@@ -870,15 +1298,15 @@ For local testing, check:
               children: [
                 // Production mode settings
                 if (_isProduction) ...[
-                  Text(
+                  const Text(
                     'S3 Image Access Issues in Production',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
-                  SizedBox(height: 8),
+                  const SizedBox(height: 8),
 
                   // CORS specific issue info
                   Container(
-                    padding: EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.red[50],
                       borderRadius: BorderRadius.circular(4),
@@ -893,13 +1321,13 @@ For local testing, check:
                               fontWeight: FontWeight.bold,
                               color: Colors.red[800]),
                         ),
-                        SizedBox(height: 4),
-                        Text(
+                        const SizedBox(height: 4),
+                        const Text(
                           'Your browser is blocking direct access to S3 images due to cross-origin restrictions.',
                           style: TextStyle(fontSize: 12),
                         ),
-                        SizedBox(height: 4),
-                        Text(
+                        const SizedBox(height: 4),
+                        const Text(
                           'Solution: Generate new presigned URLs for all images by clicking "Refresh All".',
                           style: TextStyle(
                               fontSize: 12, fontWeight: FontWeight.bold),
@@ -907,22 +1335,22 @@ For local testing, check:
                       ],
                     ),
                   ),
-                  SizedBox(height: 12),
+                  const SizedBox(height: 12),
 
-                  Text(
+                  const Text(
                     'If you\'re seeing 403 or CORS errors:',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
-                  SizedBox(height: 4),
-                  Text(
+                  const SizedBox(height: 4),
+                  const Text(
                       '1. Presigned URLs may have expired (typically after 1 hour)'),
-                  Text(
+                  const Text(
                       '2. S3 bucket permissions or CORS settings may have changed'),
-                  Text('3. AWS credentials may be invalid'),
-                  SizedBox(height: 12),
+                  const Text('3. AWS credentials may be invalid'),
+                  const SizedBox(height: 12),
 
                   Container(
-                    padding: EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.yellow[100],
                       borderRadius: BorderRadius.circular(4),
@@ -931,15 +1359,15 @@ For local testing, check:
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           'Technical Details',
                           style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                         Text('Session ID: $_cleanSessionId',
-                            style: TextStyle(fontSize: 12)),
+                            style: const TextStyle(fontSize: 12)),
                         Text(
                           'URLs using presigned method: ${_photos.where((url) => url.contains('X-Amz-Signature')).length}/${_photos.length}',
-                          style: TextStyle(fontSize: 12),
+                          style: const TextStyle(fontSize: 12),
                         ),
                       ],
                     ),
@@ -949,11 +1377,11 @@ For local testing, check:
                 // Development mode settings
                 if (!_isProduction) ...[
                   // Keep existing development mode settings
-                  Text(
+                  const Text(
                     'S3 images may return 403 Forbidden in local development',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
-                  SizedBox(height: 8),
+                  const SizedBox(height: 8),
                   // ... Other development settings
                 ],
               ],
@@ -968,7 +1396,7 @@ For local testing, check:
               Navigator.of(context).pop();
               // Show loading indicator
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Refreshing all image URLs...')),
+                const SnackBar(content: Text('Refreshing all image URLs...')),
               );
 
               // Fetch new photos with fresh URLs
@@ -976,16 +1404,16 @@ For local testing, check:
 
               // Show success message
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('All image URLs refreshed')),
+                const SnackBar(content: Text('All image URLs refreshed')),
               );
             },
-            child: Text('Refresh All'),
+            child: const Text('Refresh All'),
           ),
         TextButton(
           onPressed: () {
             Navigator.of(context).pop();
           },
-          child: Text('Close'),
+          child: const Text('Close'),
         ),
       ],
     );
@@ -997,16 +1425,16 @@ For local testing, check:
       appBar: AppBar(
         title: Row(
           children: [
-            Text('Select Photos'),
+            const Text('Select Photos'),
             if (!_isProduction)
               Container(
-                margin: EdgeInsets.only(left: 8),
-                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                margin: const EdgeInsets.only(left: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: Colors.amber,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text(
+                child: const Text(
                   'LOCAL',
                   style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
                 ),
@@ -1017,12 +1445,12 @@ For local testing, check:
         actions: [
           if (_accessToken != null)
             IconButton(
-              icon: Icon(Icons.settings),
+              icon: const Icon(Icons.settings),
               onPressed: () {
                 showDialog(
                   context: context,
                   builder: (context) => AlertDialog(
-                    title: Text('Image Access Settings'),
+                    title: const Text('Image Access Settings'),
                     content: StatefulBuilder(
                       builder: (context, setDialogState) {
                         return SingleChildScrollView(
@@ -1032,27 +1460,27 @@ For local testing, check:
                             children: [
                               // Development mode settings
                               if (!_isProduction) ...[
-                                Text(
+                                const Text(
                                   'S3 images may return 403 Forbidden in local development',
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
-                                SizedBox(height: 8),
-                                Text(
+                                const SizedBox(height: 8),
+                                const Text(
                                   'Options to fix:',
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
-                                Text(
+                                const Text(
                                     '1. Enable "Use Proxy" to route S3 requests through backend'),
-                                Text(
+                                const Text(
                                     '2. Add a proxy-image endpoint to your backend'),
-                                Text(
+                                const Text(
                                     '3. Make S3 bucket objects public (not recommended)'),
-                                Text(
+                                const Text(
                                     '4. Generate pre-signed URLs on the backend'),
-                                SizedBox(height: 12),
+                                const SizedBox(height: 12),
                                 SwitchListTile(
-                                  title: Text('Use Image Proxy'),
-                                  subtitle: Text(
+                                  title: const Text('Use Image Proxy'),
+                                  subtitle: const Text(
                                       'Route image requests through backend'),
                                   value: _useImageProxy,
                                   onChanged: (value) {
@@ -1066,40 +1494,40 @@ For local testing, check:
 
                               // Production mode settings
                               if (_isProduction) ...[
-                                Text(
+                                const Text(
                                   'S3 Image Access Issues in Production',
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
-                                SizedBox(height: 8),
-                                Text(
+                                const SizedBox(height: 8),
+                                const Text(
                                   'If you\'re seeing 403 Forbidden errors:',
                                   style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 14),
                                 ),
-                                SizedBox(height: 4),
-                                Text(
+                                const SizedBox(height: 4),
+                                const Text(
                                     '1. Presigned URLs may have expired (typically after 1 hour)'),
-                                Text(
+                                const Text(
                                     '2. S3 bucket permissions may have changed'),
-                                Text('3. AWS credentials may be invalid'),
-                                SizedBox(height: 12),
-                                Text(
+                                const Text('3. AWS credentials may be invalid'),
+                                const SizedBox(height: 12),
+                                const Text(
                                   'Troubleshooting:',
                                   style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 14),
                                 ),
-                                SizedBox(height: 4),
-                                Text(
+                                const SizedBox(height: 4),
+                                const Text(
                                     '• Try the "Refresh URL" button on images with errors'),
-                                Text(
+                                const Text(
                                     '• Check that your session is still valid'),
-                                Text(
+                                const Text(
                                     '• Contact your administrator if issues persist'),
-                                SizedBox(height: 12),
+                                const SizedBox(height: 12),
                                 Container(
-                                  padding: EdgeInsets.all(8),
+                                  padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
                                     color: Colors.yellow[100],
                                     borderRadius: BorderRadius.circular(4),
@@ -1109,16 +1537,16 @@ For local testing, check:
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Text(
+                                      const Text(
                                         'Technical Details',
                                         style: TextStyle(
                                             fontWeight: FontWeight.bold),
                                       ),
                                       Text('Session ID: $_cleanSessionId',
-                                          style: TextStyle(fontSize: 12)),
+                                          style: const TextStyle(fontSize: 12)),
                                       Text(
                                           'URLs using presigned method: ${_photos.where((url) => url.contains('X-Amz-Signature')).length}/${_photos.length}',
-                                          style: TextStyle(fontSize: 12)),
+                                          style: const TextStyle(fontSize: 12)),
                                     ],
                                   ),
                                 ),
@@ -1135,13 +1563,13 @@ For local testing, check:
                             Navigator.of(context).pop();
                             _fetchPhotos(); // Refresh all photos
                           },
-                          child: Text('Refresh All'),
+                          child: const Text('Refresh All'),
                         ),
                       TextButton(
                         onPressed: () {
                           Navigator.of(context).pop();
                         },
-                        child: Text('Close'),
+                        child: const Text('Close'),
                       ),
                     ],
                   ),
