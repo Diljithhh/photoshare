@@ -153,29 +153,70 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
     try {
       List<String> uploadedUrls = [];
 
-      if (_useDirectUpload) {
-        // Direct upload approach
-        uploadedUrls =
-            await _uploadService.uploadImagesDirectly(eventId, _selectedImages);
-      } else {
-        // Presigned URL approach
-        uploadedUrls = await _uploadService.uploadImagesWithPresignedUrls(
-            eventId, _selectedImages);
+      // Listen to status updates from the upload service to show progress
+      void updateProgress() {
+        final status = _uploadService.statusMessage.value;
+        setState(() {
+          _statusMessage = status;
+
+          // Update progress based on status messages
+          if (status.contains('Starting upload') ||
+              status.contains('Getting presigned URLs')) {
+            _uploadProgress = 0.1;
+          } else if (status.contains('Uploading part')) {
+            // Try to extract progress information from the status message
+            final regex = RegExp(r'Uploading part (\d+)/(\d+)');
+            final match = regex.firstMatch(status);
+            if (match != null && match.groupCount >= 2) {
+              final current = int.tryParse(match.group(1) ?? '0') ?? 0;
+              final total = int.tryParse(match.group(2) ?? '1') ?? 1;
+              if (total > 0) {
+                // Set progress between 0.1 and 0.9 based on part progress
+                _uploadProgress = 0.1 + (0.8 * (current / total));
+              }
+            }
+          } else if (status.contains('Completing multipart upload')) {
+            _uploadProgress = 0.9;
+          } else if (status.contains('Upload complete')) {
+            _uploadProgress = 1.0;
+          } else if (status.contains('Connection lost')) {
+            // Don't change progress when connection is lost
+          }
+        });
       }
 
-      // Create a session with the uploaded photos
-      setState(() {
-        _statusMessage = 'Creating sharing session...';
-        _uploadProgress = 0.9; // Almost done
-      });
+      // Add listener for status updates
+      _uploadService.statusMessage.addListener(updateProgress);
 
-      final session = await _uploadService.createSession(eventId, uploadedUrls);
+      try {
+        if (_useDirectUpload) {
+          // Direct upload approach
+          uploadedUrls = await _uploadService.uploadImagesDirectly(
+              eventId, _selectedImages);
+        } else {
+          // Presigned URL approach
+          uploadedUrls = await _uploadService.uploadImagesWithPresignedUrls(
+              eventId, _selectedImages);
+        }
 
-      setState(() {
-        _sessionResponse = session;
-        _statusMessage = 'Upload complete!';
-        _uploadProgress = 1.0; // Done
-      });
+        // Create a session with the uploaded photos
+        setState(() {
+          _statusMessage = 'Creating sharing session...';
+          _uploadProgress = 0.9; // Almost done
+        });
+
+        final session =
+            await _uploadService.createSession(eventId, uploadedUrls);
+
+        setState(() {
+          _sessionResponse = session;
+          _statusMessage = 'Upload complete!';
+          _uploadProgress = 1.0; // Done
+        });
+      } finally {
+        // Make sure to remove the listener when done
+        _uploadService.statusMessage.removeListener(updateProgress);
+      }
     } catch (e) {
       print('Error during upload process: $e');
       setState(() {
@@ -320,8 +361,6 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
             Column(
               children: [
                 Icon(Icons.cloud_upload, size: 48, color: Colors.grey[400]),
-
-
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
                   onPressed: _pickImages,
@@ -358,8 +397,6 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 24, vertical: 12),
                       ),
-
-
                       child:
                           Text(_isUploading ? 'Uploading...' : 'Upload Files'),
                     ),
@@ -584,7 +621,8 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                     IconButton(
                       icon: const Icon(Icons.copy, size: 20),
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: _sessionResponse?.sessionLink ?? ''));
+                        Clipboard.setData(ClipboardData(
+                            text: _sessionResponse?.sessionLink ?? ''));
 
                         // Copy link to clipboard
                         if (_sessionResponse != null) {
@@ -633,7 +671,8 @@ class _PhotoShareAppState extends State<PhotoShareApp> {
                     IconButton(
                       icon: const Icon(Icons.copy, size: 20),
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: _sessionResponse?.password ?? ''));
+                        Clipboard.setData(ClipboardData(
+                            text: _sessionResponse?.password ?? ''));
                         // Copy password to clipboard
                         if (_sessionResponse != null) {
                           ScaffoldMessenger.of(context).showSnackBar(

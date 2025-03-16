@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "allow"
 
 app = FastAPI(
     title="Photo Upload API",

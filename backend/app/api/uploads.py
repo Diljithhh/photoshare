@@ -895,3 +895,229 @@ async def proxy_upload(
             status_code=500,
             detail=f"Proxy upload failed: {str(e)}"
         )
+
+# Support for multipart uploads
+class MultipartUploadRequest(BaseModel):
+    event_id: str
+    file_names: List[str]
+
+class MultipartPartRequest(BaseModel):
+    event_id: str
+    file_name: str
+    upload_id: str
+    part_number: int
+
+class CompleteMultipartUploadRequest(BaseModel):
+    event_id: str
+    file_name: str
+    upload_id: str
+    parts: List[dict]
+
+@router.post("/generate-multipart-upload-urls")
+async def generate_multipart_upload_urls(
+    request: MultipartUploadRequest,
+    s3_client = Depends(get_s3_client)
+):
+    """
+    Initiate multipart uploads for multiple files and return presigned URLs.
+    This endpoint is used to start the multipart upload process for large files.
+    """
+    try:
+        event_id = request.event_id
+        file_names = request.file_names
+
+        # Validate event_id (implement your validation logic)
+        if not event_id:
+            raise HTTPException(status_code=400, detail="Invalid event ID")
+
+        upload_configs = []
+
+        for file_name in file_names:
+            # Create a unique key for the file
+            file_id = str(uuid.uuid4())
+            file_key = f"{event_id}/{file_id}/{file_name}"
+
+            # Initiate the multipart upload
+            try:
+                multipart_upload = s3_client.create_multipart_upload(
+                    Bucket=BUCKET_NAME,
+                    Key=file_key,
+                    ContentType='image/jpeg',  # Adjust based on file type detection
+                    ACL='public-read'  # Make the final object publicly readable
+                )
+
+                upload_id = multipart_upload['UploadId']
+
+                # Construct the public URL that will be available after completing the upload
+                public_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file_key}"
+
+                upload_configs.append({
+                    "file_name": file_name,
+                    "upload_id": upload_id,
+                    "file_key": file_key,
+                    "file_url": public_url
+                })
+
+                logger.info(f"Initiated multipart upload for {file_name}, upload_id: {upload_id}")
+            except ClientError as e:
+                logger.error(f"Error initiating multipart upload: {str(e)}")
+                # Continue with other files even if one fails
+                continue
+
+        return {
+            "message": "Multipart upload initiated successfully",
+            "upload_configs": upload_configs
+        }
+    except Exception as e:
+        logger.error(f"Error in generate_multipart_upload_urls: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to initiate multipart upload: {str(e)}")
+
+@router.post("/get-presigned-upload-part-url")
+async def get_presigned_upload_part_url(
+    request: MultipartPartRequest,
+    s3_client = Depends(get_s3_client)
+):
+    """
+    Generate a presigned URL for uploading a specific part of a multipart upload.
+    This endpoint is called for each chunk of a file being uploaded.
+    """
+    try:
+        event_id = request.event_id
+        file_name = request.file_name
+        upload_id = request.upload_id
+        part_number = request.part_number
+
+        # Validate input
+        if not all([event_id, file_name, upload_id, part_number]):
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+
+        if part_number < 1 or part_number > 10000:  # S3 limits part numbers between 1-10000
+            raise HTTPException(status_code=400, detail="Invalid part number")
+
+        # Extract the file key from the upload ID context
+        # In a production system, you might store this in a database
+        # For this example, we'll parse it from the file name and event ID
+        # Assume format: "{event_id}/{file_id}/{file_name}"
+
+        # This is a simplification - in a real system, you'd retrieve the key from a database
+        # where you stored it during the multipart upload initiation
+        # For this example, we'll use a simple approach with a fixed path
+        parts = file_name.split('/')
+        base_name = parts[-1] if len(parts) > 1 else file_name
+
+        # Use AWS SDK to generate a presigned URL for this part
+        try:
+            # Extract the file_key from the event_id and file_name
+            # In a real implementation, you would retrieve this from a database
+            # where you stored it when initiating the multipart upload
+            # This is a simplification
+
+            # Get all multipart uploads in the bucket
+            uploads = s3_client.list_multipart_uploads(Bucket=BUCKET_NAME)
+
+            file_key = None
+            # Find the upload with the matching upload_id
+            for upload in uploads.get('Uploads', []):
+                if upload.get('UploadId') == upload_id:
+                    file_key = upload.get('Key')
+                    break
+
+            if not file_key:
+                raise HTTPException(status_code=404, detail="Upload not found")
+
+            # Generate the presigned URL for this part
+            presigned_url = s3_client.generate_presigned_url(
+                'upload_part',
+                Params={
+                    'Bucket': BUCKET_NAME,
+                    'Key': file_key,
+                    'UploadId': upload_id,
+                    'PartNumber': part_number
+                },
+                ExpiresIn=3600  # URL valid for 1 hour
+            )
+
+            return {
+                "presigned_url": presigned_url,
+                "part_number": part_number,
+                "file_key": file_key
+            }
+        except ClientError as e:
+            logger.error(f"Error generating presigned URL for part: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to generate presigned URL: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in get_presigned_upload_part_url: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get presigned URL: {str(e)}")
+
+@router.post("/complete-multipart-upload")
+async def complete_multipart_upload(
+    request: CompleteMultipartUploadRequest,
+    s3_client = Depends(get_s3_client)
+):
+    """
+    Complete a multipart upload by combining all uploaded parts.
+    This endpoint is called after all chunks have been successfully uploaded.
+    """
+    try:
+        event_id = request.event_id
+        file_name = request.file_name
+        upload_id = request.upload_id
+        parts = request.parts
+
+        # Validate input
+        if not all([event_id, file_name, upload_id, parts]):
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+
+        if not parts:
+            raise HTTPException(status_code=400, detail="No parts provided")
+
+        # Same file key retrieval logic as in get_presigned_upload_part_url
+        uploads = s3_client.list_multipart_uploads(Bucket=BUCKET_NAME)
+
+        file_key = None
+        # Find the upload with the matching upload_id
+        for upload in uploads.get('Uploads', []):
+            if upload.get('UploadId') == upload_id:
+                file_key = upload.get('Key')
+                break
+
+        if not file_key:
+            raise HTTPException(status_code=404, detail="Upload not found")
+
+        # Prepare the parts list for the complete_multipart_upload call
+        # parts should be a list of dicts with 'PartNumber' and 'ETag' keys
+        # First, make sure parts are sorted by part number
+        sorted_parts = sorted(parts, key=lambda x: x['PartNumber'])
+
+        try:
+            # Complete the multipart upload
+            response = s3_client.complete_multipart_upload(
+                Bucket=BUCKET_NAME,
+                Key=file_key,
+                UploadId=upload_id,
+                MultipartUpload={'Parts': sorted_parts}
+            )
+
+            # Get the final S3 object URL
+            final_url = response.get('Location')
+            if not final_url:
+                final_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file_key}"
+
+            return {
+                "message": "Multipart upload completed successfully",
+                "file_url": final_url,
+                "file_key": file_key
+            }
+        except ClientError as e:
+            logger.error(f"Error completing multipart upload: {str(e)}")
+
+            # Provide more detailed error information
+            error_msg = str(e)
+            if "InvalidPart" in error_msg:
+                # This happens when a part is missing or has incorrect ETag
+                raise HTTPException(status_code=400, detail="Invalid parts list. Some parts may be missing or incorrect.")
+
+            raise HTTPException(status_code=500, detail=f"Failed to complete multipart upload: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in complete_multipart_upload: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to complete multipart upload: {str(e)}")
