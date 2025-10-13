@@ -1,0 +1,13 @@
+# Android SDK Configuration
+# Copy this file to local.properties and update the paths for your system
+
+# Android SDK location
+sdk.dir=/path/to/your/android/sdk
+
+# Flutter SDK location
+flutter.sdk=/path/to/your/flutter/sdk
+
+# Example paths:
+# macOS: /Users/username/Library/Android/sdk
+# Windows: C:\Users\username\AppData\Local\Android\Sdk
+# Linux: /home/username/Android/Sdk
