@@ -3,9 +3,8 @@ import boto3
 from moto import mock_aws
 from fastapi.testclient import TestClient
 from app.main import app
+from app.api.uploads import BUCKET_NAME
 from app.services.dynamodb import UPLOAD_PARTS_TABLE
-
-BUCKET_NAME = 'screenmirror-canvas-storage'
 
 
 @pytest.fixture
@@ -42,3 +41,5 @@ def test_generate_multipart_upload_stores_key_in_dynamodb(aws_ctx):
     item = table.get_item(Key={'upload_id': upload_id}).get('Item')
     assert item is not None
     assert item['file_key'] == file_key
+    assert item['event_id'] == 'evt-1'
+    assert 'ttl' in item

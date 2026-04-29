@@ -13,7 +13,7 @@ from fastapi.responses import Response, JSONResponse
 from urllib.parse import urlparse, parse_qs
 import base64
 import httpx
-from app.services.dynamodb import save_upload_key, get_file_key_for_upload
+from app.services.dynamodb import save_upload_key
 
 
 
