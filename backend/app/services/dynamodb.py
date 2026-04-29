@@ -50,3 +50,14 @@ def ensure_upload_parts_table_exists() -> None:
     except ClientError as e:
         if e.response['Error']['Code'] != 'ResourceInUseException':
             raise
+
+    # Enable TTL (DynamoDB raises ValidationException if already enabled — that's fine)
+    client = dynamodb.meta.client
+    try:
+        client.update_time_to_live(
+            TableName=UPLOAD_PARTS_TABLE,
+            TimeToLiveSpecification={'Enabled': True, 'AttributeName': 'ttl'},
+        )
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'ValidationException':
+            raise
