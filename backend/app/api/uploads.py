@@ -13,7 +13,7 @@ from fastapi.responses import Response, JSONResponse
 from urllib.parse import urlparse, parse_qs
 import base64
 import httpx
-from app.services.dynamodb import save_upload_key
+from app.services.dynamodb import save_upload_key, get_file_key_for_upload
 
 
 
@@ -1011,44 +1011,32 @@ async def get_presigned_upload_part_url(
 
         # Use AWS SDK to generate a presigned URL for this part
         try:
-            # Extract the file_key from the event_id and file_name
-            # In a real implementation, you would retrieve this from a database
-            # where you stored it when initiating the multipart upload
-            # This is a simplification
-
-            # Get all multipart uploads in the bucket
-            uploads = s3_client.list_multipart_uploads(Bucket=BUCKET_NAME)
-
-            file_key = None
-            # Find the upload with the matching upload_id
-            for upload in uploads.get('Uploads', []):
-                if upload.get('UploadId') == upload_id:
-                    file_key = upload.get('Key')
-                    break
-
+            file_key = get_file_key_for_upload(upload_id)
             if not file_key:
                 raise HTTPException(status_code=404, detail="Upload not found")
 
-            # Generate the presigned URL for this part
             presigned_url = s3_client.generate_presigned_url(
                 'upload_part',
                 Params={
                     'Bucket': BUCKET_NAME,
                     'Key': file_key,
                     'UploadId': upload_id,
-                    'PartNumber': part_number
+                    'PartNumber': part_number,
                 },
-                ExpiresIn=3600  # URL valid for 1 hour
+                ExpiresIn=3600,
             )
-
             return {
-                "presigned_url": presigned_url,
-                "part_number": part_number,
-                "file_key": file_key
+                'presigned_url': presigned_url,
+                'part_number': part_number,
+                'file_key': file_key,
             }
+        except HTTPException:
+            raise
         except ClientError as e:
             logger.error(f"Error generating presigned URL for part: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to generate presigned URL: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in get_presigned_upload_part_url: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get presigned URL: {str(e)}")
@@ -1075,16 +1063,7 @@ async def complete_multipart_upload(
         if not parts:
             raise HTTPException(status_code=400, detail="No parts provided")
 
-        # Same file key retrieval logic as in get_presigned_upload_part_url
-        uploads = s3_client.list_multipart_uploads(Bucket=BUCKET_NAME)
-
-        file_key = None
-        # Find the upload with the matching upload_id
-        for upload in uploads.get('Uploads', []):
-            if upload.get('UploadId') == upload_id:
-                file_key = upload.get('Key')
-                break
-
+        file_key = get_file_key_for_upload(upload_id)
         if not file_key:
             raise HTTPException(status_code=404, detail="Upload not found")
 
