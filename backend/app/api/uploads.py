@@ -13,6 +13,7 @@ from fastapi.responses import Response, JSONResponse
 from urllib.parse import urlparse, parse_qs
 import base64
 import httpx
+from app.services.dynamodb import save_upload_key, get_file_key_for_upload
 
 
 
@@ -947,6 +948,9 @@ async def generate_multipart_upload_urls(
                 )
 
                 upload_id = multipart_upload['UploadId']
+
+                # Store upload_id → file_key so subsequent part requests can look it up in O(1)
+                save_upload_key(upload_id, file_key, event_id)
 
                 # Construct the public URL that will be available after completing the upload
                 public_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file_key}"

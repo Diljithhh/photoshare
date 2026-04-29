@@ -11,7 +11,7 @@ server = "app.main:start_server"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-fastapi = "^0.109.0"
+fastapi = "^0.111.0"
 uvicorn = "^0.27.0"
 python-dotenv = "^1.0.0"
 sqlalchemy = "^2.0.25"
