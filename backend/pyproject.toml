@@ -32,6 +32,8 @@ python-multipart = "^0.0.20"
 black = "^24.1.0"
 flake8 = "^7.0.0"
 pytest = "^8.0.0"
+pytest-asyncio = "^0.23.0"
+moto = {version = "^5.0.0", extras = ["s3", "dynamodb"]}
 
 [build-system]
 requires = ["poetry-core"]
