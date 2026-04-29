@@ -108,3 +108,13 @@ def test_complete_multipart_upload_uses_dynamodb_lookup(aws_ctx):
     })
     assert resp.status_code == 200
     assert 'file_url' in resp.json()
+
+
+def test_complete_multipart_upload_returns_404_when_upload_not_found(aws_ctx):
+    resp = aws_ctx['client'].post('/api/v1/complete-multipart-upload', json={
+        'event_id': 'evt-1',
+        'file_name': 'photo.jpg',
+        'upload_id': 'nonexistent-upload-id',
+        'parts': [{'PartNumber': 1, 'ETag': 'abc123'}],
+    })
+    assert resp.status_code == 404

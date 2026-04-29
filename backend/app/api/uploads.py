@@ -998,17 +998,6 @@ async def get_presigned_upload_part_url(
         if part_number < 1 or part_number > 10000:  # S3 limits part numbers between 1-10000
             raise HTTPException(status_code=400, detail="Invalid part number")
 
-        # Extract the file key from the upload ID context
-        # In a production system, you might store this in a database
-        # For this example, we'll parse it from the file name and event ID
-        # Assume format: "{event_id}/{file_id}/{file_name}"
-
-        # This is a simplification - in a real system, you'd retrieve the key from a database
-        # where you stored it during the multipart upload initiation
-        # For this example, we'll use a simple approach with a fixed path
-        parts = file_name.split('/')
-        base_name = parts[-1] if len(parts) > 1 else file_name
-
         # Use AWS SDK to generate a presigned URL for this part
         try:
             file_key = get_file_key_for_upload(upload_id)
@@ -1101,6 +1090,8 @@ async def complete_multipart_upload(
                 raise HTTPException(status_code=400, detail="Invalid parts list. Some parts may be missing or incorrect.")
 
             raise HTTPException(status_code=500, detail=f"Failed to complete multipart upload: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in complete_multipart_upload: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to complete multipart upload: {str(e)}")
