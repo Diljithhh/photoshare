@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 # Import the photo upload router - adjust the import path as needed
 from app.api.uploads import router as photo_router
+from app.services.dynamodb import ensure_upload_parts_table_exists
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -123,6 +124,11 @@ async def startup_event():
 
     logger.info(f"Application initialized in {app.state.config.ENVIRONMENT} mode")
     logger.info(f"Using AWS region: {app.state.config.AWS_DEFAULT_REGION}")
+    try:
+        ensure_upload_parts_table_exists()
+        logger.info("upload_parts DynamoDB table ready")
+    except Exception as e:
+        logger.warning(f"Could not ensure upload_parts table: {e}")
 
 # Add CORS middleware - only used as fallback, our custom middleware handles most cases
 app.add_middleware(
